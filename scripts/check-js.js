@@ -9,7 +9,11 @@
 const fs = require('fs');
 const vm = require('vm');
 
-const files = process.argv.slice(2);
+function expandGlobs(args) {
+  return args.flatMap((arg) => (arg.includes('*') && typeof fs.globSync === 'function' ? fs.globSync(arg) : [arg]));
+}
+
+const files = expandGlobs(process.argv.slice(2));
 if (files.length === 0) {
   console.error('Usage: node scripts/check-js.js <file.html> [file2.html ...]');
   process.exit(1);

@@ -12,7 +12,11 @@
 const fs = require('fs');
 const path = require('path');
 
-const files = process.argv.slice(2);
+function expandGlobs(args) {
+  return args.flatMap((arg) => (arg.includes('*') && typeof fs.globSync === 'function' ? fs.globSync(arg) : [arg]));
+}
+
+const files = expandGlobs(process.argv.slice(2));
 if (files.length === 0) {
   console.error('Usage: node scripts/check-design.js <game/index.html> ...');
   process.exit(1);
