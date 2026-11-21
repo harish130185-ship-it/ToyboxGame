@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<!-- LibreToybox — Fold & Draw (Exquisite Corpse) · Licensed under the GNU GPL v3.0; see ../LICENSE -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fold &amp; Draw</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪁</text></svg>" />
+  <link rel="manifest" href="../manifest.webmanifest" />
+  <meta name="theme-color" content="#9480DC" />
+  <style>
+    :root {
+      --bg1: #F3F0FF;
+      --bg2: #E0D9FF;
+      --accent: #9480DC;
+      --border: #C0B4F0;
+      --text: #3A3060;
+      --shadow: #b0a4e0;
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    /* Own background on html stops the body gradient propagating to the
+       canvas, where it would tile — rubber-band overscroll then shows the
+       wrong end of the gradient instead of blending with the page. */
+    html { background: var(--bg1); }
+    body {
+      font-family: ui-rounded, 'Hiragino Maru Gothic ProN', Quicksand, Comfortaa, 'Arial Rounded MT Bold', 'Varela Round', Calibri, sans-serif;
+      background: linear-gradient(180deg, var(--bg1), var(--bg2));
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+      height: 100%;
+    }
+
+    .top-btn {
+      position: relative;
+      background: #fff;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 6px 10px;
+      font-family: inherit;
+      font-size: 1.3rem;
+      cursor: pointer;
+      box-shadow: 0 3px 0 var(--shadow);
+      transition: transform .05s, box-shadow .05s;
+      min-width: 48px;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      color: inherit;
+    }
+    .top-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--shadow); }
+    /* New Game requires a deliberate hold, not a quick tap, so an accidental
+       tap can't silently wipe the drawing in progress. */
+    .hold-progress { position: absolute; inset: 5px; border-radius: 50%; pointer-events: none; opacity: 0; transition: opacity .1s; }
+    .top-btn.holding .hold-progress { opacity: 1; }
+    .top-btns { display: flex; gap: 8px; }
+
+    main {
+      width: 100%;
+      flex: 1;
+      padding: 2px 12px 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      min-height: 0;
+    }
+
+    /* Visually hidden but available to screen readers (aria-live announcements
+       still fire). Standard clip-based sr-only pattern. */
+    #status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+    #phase-banner {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+      min-height: 48px;
+    }
+
+    /* The area fills all leftover vertical space and centres the paper; the
+       paper (#canvas-wrap) is sized in JS to the largest A4 rectangle that
+       fits — portrait in Tall mode, landscape in Wide — so it uses as much
+       of a tablet's screen as possible without ever distorting. */
+    #canvas-area {
+      flex: 1;
+      min-height: 0;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #canvas-wrap {
+      position: relative;
+      background: #fff;
+      border: 3px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.13);
+      overflow: hidden;
+    }
+
+    #drawing-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      touch-action: none;
+      cursor: crosshair;
+      display: block;
+    }
+
+    #reveal-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 5;
+    }
+
+    /* Grey tint marking the peek strips: #peek-overlay is the previous
+       section's tail (top, not drawable); #next-peek-overlay is this
+       section's own tail (bottom, still drawable) — the sliver that will
+       become the *next* player's top peek once this section is done. */
+    #peek-overlay, #next-peek-overlay {
+      position: absolute;
+      left: 0;
+      width: 100%;
+      height: 0;
+      background: rgba(120, 120, 120, 0.22);
+      pointer-events: none;
+      z-index: 3;
+    }
+    #peek-overlay { top: 0; }
+    #next-peek-overlay { bottom: 0; }
+
+    /* Horizontal dashed seam line at the boundary between a peek strip and the drawing area */
+    #fold-guide, #next-fold-guide {
+      position: absolute;
+      left: 0;
+      width: 100%;
+      height: 4px;
+      background: repeating-linear-gradient(
+        90deg,
+        rgba(110, 110, 110, 0.85) 0 14px,
+        transparent 14px 22px
+      );
+      pointer-events: none;
+      z-index: 4;
+      display: none;
+    }
+
+    /* On a wide tablet the A4 paper is height-limited and centred, so keep the
+       controls grouped to a comfortable width instead of spreading them across
+       the whole viewport. */
+    #toolbar {
+      width: 100%;
+      max-width: 560px;
+      align-self: center;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    /* Rows wrap so the ≥64 px controls (design principle 4) never overflow
+       narrow phones — six 64 px swatches need ~424 px in one line. */
+    #color-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+    }
+
+    .color-swatch {
+      width: 64px;
+      height: 64px;
+      border-radius: 12px;
+      border: 3px solid transparent;
+      cursor: pointer;
+      transition: transform .1s, border-color .1s;
+      box-shadow: 0 3px 6px rgba(0,0,0,0.18);
+    }
+    .color-swatch.active { border-color: var(--text); transform: scale(1.15); }
+    .color-swatch:active { transform: scale(0.9); }
+
+    #tool-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .brush-btn {
+      width: 64px;
+      height: 64px;
+      border: 3px solid var(--border);
+      border-radius: 12px;
+      background: #fff;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 3px 0 var(--shadow);
+      transition: transform .05s, border-color .1s, background .1s;
+    }
+    .brush-btn.active { border-color: var(--accent); background: #ede8ff; }
+    .brush-btn:active { transform: translateY(2px); }
+
+    .brush-dot { border-radius: 50%; background: var(--text); display: block; }
+
+    .action-btn {
+      width: 64px;
+      height: 64px;
+      border: 3px solid var(--border);
+      border-radius: 12px;
+      background: #fff;
+      font-family: inherit;
+      font-size: 1.4rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 3px 0 var(--shadow);
+      transition: transform .05s;
+    }
+    .action-btn:active { transform: translateY(2px); }
+
+    #done-btn {
+      position: relative;
+      overflow: hidden;
+      width: 100%;
+      max-width: 560px;
+      align-self: center;
+      height: 56px;
+      border: none;
+      border-radius: 16px;
+      background: #66BB6A;
+      color: #fff;
+      font-family: inherit;
+      font-size: 2rem;
+      cursor: pointer;
+      box-shadow: 0 5px 0 #43A047;
+      transition: transform .05s, box-shadow .05s;
+      flex-shrink: 0;
+    }
+    #done-btn:active { transform: translateY(3px); box-shadow: 0 2px 0 #43A047; }
+    /* Left-to-right fill while the button is held — Done requires a hold, not a
+       tap, so an accidental brush of the button can't end a turn early. */
+    #done-btn .done-progress {
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 0;
+      background: rgba(255,255,255,0.4);
+      pointer-events: none;
+      opacity: 0;
+    }
+    /* Only visible mid-hold, so a residual full bar vanishes the instant the
+       hold completes or cancels (same trick as the New Game ring's opacity). */
+    #done-btn.holding .done-progress { opacity: 1; }
+    #done-btn .done-icon { position: relative; z-index: 1; }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      text-align: center;
+      padding: 24px;
+    }
+    .overlay.show { display: flex; }
+
+
+    #win-actions {
+      width: 100%;
+      max-width: 560px;
+      align-self: center;
+      display: none;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .win-btn {
+      flex: 1;
+      height: 56px;
+      border: none;
+      border-radius: 16px;
+      font-family: inherit;
+      font-size: 1.8rem;
+      cursor: pointer;
+      transition: transform .05s, box-shadow .05s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+    }
+    #download-btn {
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 5px 0 #6F5BB5;
+    }
+    #download-btn:active { transform: translateY(3px); box-shadow: 0 2px 0 #6F5BB5; }
+    #win-home-btn {
+      background: #42A5F5;
+      color: #fff;
+      box-shadow: 0 5px 0 #1E88E5;
+    }
+    #win-home-btn:active { transform: translateY(3px); box-shadow: 0 2px 0 #1E88E5; }
+    #play-again {
+      background: #66BB6A;
+      color: #fff;
+      box-shadow: 0 5px 0 #43A047;
+    }
+    #play-again:active { transform: translateY(3px); box-shadow: 0 2px 0 #43A047; }
+
+    /* Translucent white like every other game's settings overlay */
+    #settings-overlay, #tutorial-overlay { background: rgba(255,255,255,0.92); }
+    .settings-card {
+      background: #fff;
+      border: 3px solid var(--border);
+      border-radius: 20px;
+      padding: 24px 28px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.18);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      min-width: 270px;
+    }
+    .settings-card h2 { margin: 0; font-size: 2rem; }
+    .radio-options { display: flex; gap: 12px; }
+    .radio-option {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 22px;
+      border: 3px solid var(--border);
+      border-radius: 16px;
+      background: #fff;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 1rem;
+      color: var(--text);
+      transition: border-color .15s, background .15s;
+      min-width: 90px;
+    }
+    .radio-option .page-icon {
+      font-size: 2.4rem;
+      display: block;
+      transition: transform 0.35s ease;
+    }
+    .radio-option.wide-option .page-icon { transform: rotate(90deg); }
+    .radio-option.selected { border-color: var(--accent); background: #ede8ff; }
+  </style>
+</head>
+<body>
+
+<main>
+  <div id="status" aria-live="polite"></div>
+  <div id="phase-banner">
+    <a class="top-btn" id="back-btn" href="../index.html" aria-label="Back to LibreToybox home">🏠</a>
+    <div class="top-btns">
+      <button class="top-btn" id="new-game" aria-label="New Game">🔄<span class="hold-progress" aria-hidden="true"></span></button>
+      <button class="top-btn" id="settings-btn" aria-label="Settings">⚙️</button>
+      <button class="top-btn" id="tutorial-btn" aria-label="How to Play">❓</button>
+    </div>
+  </div>
+  <div id="canvas-area">
+    <div id="canvas-wrap">
+      <canvas id="drawing-canvas"></canvas>
+      <div id="peek-overlay"></div>
+      <div id="fold-guide"></div>
+      <div id="next-peek-overlay"></div>
+      <div id="next-fold-guide"></div>
+      <canvas id="reveal-canvas"></canvas>
+    </div>
+  </div>
+  <div id="toolbar">
+    <div id="color-row"></div>
+    <div id="tool-row"></div>
+  </div>
+  <button id="done-btn" aria-label="Hold to finish this section"><span class="done-progress" aria-hidden="true"></span><span class="done-icon" aria-hidden="true">✓</span></button>
+  <div id="win-actions">
+    <a class="win-btn" id="win-home-btn" href="../index.html" aria-label="Back to LibreToybox home">🏠</a>
+    <button class="win-btn" id="download-btn" aria-label="Download painting">💾</button>
+    <button class="win-btn" id="play-again" aria-label="Play Again">🔄</button>
+  </div>
+</main>
+
+
+<div class="overlay" id="settings-overlay" role="dialog" aria-modal="true">
+  <div class="settings-card">
+    <h2>⚙️</h2>
+    <div class="radio-options" role="radiogroup" aria-label="Canvas shape">
+      <button class="radio-option" id="mode-tall" role="radio" aria-checked="true" aria-label="Tall canvas">
+        <span class="page-icon">📄</span>
+        Tall
+      </button>
+      <button class="radio-option wide-option" id="mode-wide" role="radio" aria-checked="false" aria-label="Wide canvas">
+        <span class="page-icon">📄</span>
+        Wide
+      </button>
+    </div>
+    <button class="top-btn" id="close-settings" aria-label="Close settings">✕</button>
+  </div>
+</div>
+
+<div class="overlay" id="tutorial-overlay" role="dialog" aria-modal="true" aria-label="How to Play">
+  <div class="settings-card">
+    <h2>🎓</h2>
+    <p>Tutorial coming soon!</p>
+    <button class="top-btn" id="close-tutorial" aria-label="Close">✕</button>
+  </div>
+</div>
+
+<script>
+// --- Shared modal a11y helper (copied into each game — the suite ships no
+// bundler). Moves focus into an opened overlay, traps Tab within it, closes on
+// Escape, and restores focus to the opener on close (design principle 8). ---
+const Modal = {
+  opener: null, overlay: null, onDismiss: null, handler: null,
+  focusable(el) {
+    return [...el.querySelectorAll('a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+      .filter(n => n.getClientRects().length > 0);
+  },
+  open(overlay, onDismiss) {
+    this.opener = document.activeElement;
+    this.overlay = overlay;
+    this.onDismiss = onDismiss || null;
+    const items = this.focusable(overlay);
+    (items[0] || overlay).focus({ preventScroll: true });
+    this.handler = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (this.onDismiss) this.onDismiss(); else this.close();
+      } else if (e.key === 'Tab') {
+        const f = this.focusable(overlay);
+        if (!f.length) { e.preventDefault(); return; }
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && (document.activeElement === first || !overlay.contains(document.activeElement))) {
+          e.preventDefault(); last.focus();
+        } else if (!e.shiftKey && (document.activeElement === last || !overlay.contains(document.activeElement))) {
+          e.preventDefault(); first.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', this.handler, true);
+  },
+  close() {
+    if (this.handler) document.removeEventListener('keydown', this.handler, true);
+    this.handler = null;
+    const opener = this.opener;
+    this.opener = this.overlay = this.onDismiss = null;
+    if (opener && opener.focus) opener.focus({ preventScroll: true });
+  }
+};
+
+const App = {
+  sections: 3,       // always 3: top (head) · middle (body) · bottom (legs)
+  canvasMode: 'tall', // 'tall' = portrait (phone), 'wide' = landscape (tablet/computer)
+  currentSection: 0,
+  color: '#222222',
+  brushSize: 4,   // must match a button offered by buildToolbar() ([4, 14]) —
+                  // the thin button is marked active on load, so start there.
+  drawing: false,
+  currentStroke: null,
+  strokes: [],      // strokes for the active section (undo stack)
+  allStrokes: [],   // all committed strokes from past sections
+  audioCtx: null,
+  won: false,
+  doneInProgress: false,
+  artworkCanvas: null, // undistorted full-resolution render, set by reveal()
+
+  COLORS: ['#222222', '#E53935', '#FF8F00', '#2E7D32', '#1565C0', '#6A1B9A'],
+  PEEK_PX: 40,   // pixels of previous section visible as connection guide
+
+  sectionInfo: [
+    { label: 'head' },
+    { label: 'body' },
+    { label: 'legs' }
+  ],
+
+  init() {
+    this.cacheDOM();
+    this.buildToolbar();
+    this.bindEvents();
+    this.setupPWA();
+    // defer so layout is complete before we measure canvas dimensions
+    requestAnimationFrame(() => this.newGame());
+  },
+
+  cacheDOM() {
+    this.canvas = document.getElementById('drawing-canvas');
+    this.ctx = this.canvas.getContext('2d');
+    this.canvasArea = document.getElementById('canvas-area');
+    this.canvasWrap = document.getElementById('canvas-wrap');
+    this.peekOverlay = document.getElementById('peek-overlay');
+    this.foldGuide = document.getElementById('fold-guide');
+    this.nextPeekOverlay = document.getElementById('next-peek-overlay');
+    this.nextFoldGuide = document.getElementById('next-fold-guide');
+    this.revealCanvas = document.getElementById('reveal-canvas');
+    this.doneBtn = document.getElementById('done-btn');
+    this.statusEl = document.getElementById('status');
+    this.winActions = document.getElementById('win-actions');
+    this.playAgainBtn = document.getElementById('play-again');
+    this.downloadBtn = document.getElementById('download-btn');
+    this.newGameBtn = document.getElementById('new-game');
+    this.settingsBtn = document.getElementById('settings-btn');
+    this.settingsOverlay = document.getElementById('settings-overlay');
+    this.closeSettingsBtn = document.getElementById('close-settings');
+    this.tutorialBtn = document.getElementById('tutorial-btn');
+    this.tutorialOverlay = document.getElementById('tutorial-overlay');
+    this.closeTutorialBtn = document.getElementById('close-tutorial');
+    this.modeTallBtn = document.getElementById('mode-tall');
+    this.modeWideBtn = document.getElementById('mode-wide');
+  },
+
+  buildToolbar() {
+    const colorRow = document.getElementById('color-row');
+    this.COLORS.forEach((c, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'color-swatch' + (i === 0 ? ' active' : '');
+      btn.style.background = c;
+      btn.dataset.color = c;
+      btn.setAttribute('aria-label', 'Color ' + (i + 1));
+      colorRow.appendChild(btn);
+    });
+
+    const toolRow = document.getElementById('tool-row');
+    [4, 14].forEach((size, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'brush-btn' + (i === 0 ? ' active' : '');
+      btn.dataset.size = size;
+      btn.setAttribute('aria-label', (i === 0 ? 'Thin' : 'Thick') + ' brush');
+      const dot = document.createElement('span');
+      dot.className = 'brush-dot';
+      dot.style.width = size + 'px';
+      dot.style.height = size + 'px';
+      btn.appendChild(dot);
+      toolRow.appendChild(btn);
+    });
+
+    const undoBtn = document.createElement('button');
+    undoBtn.className = 'action-btn';
+    undoBtn.id = 'undo-btn';
+    undoBtn.textContent = '↩';
+    undoBtn.setAttribute('aria-label', 'Undo last stroke');
+    toolRow.appendChild(undoBtn);
+
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'action-btn';
+    clearBtn.id = 'clear-btn';
+    clearBtn.textContent = '🗑️';
+    clearBtn.setAttribute('aria-label', 'Clear this section');
+    toolRow.appendChild(clearBtn);
+  },
+
+  bindEvents() {
+    this.bindNewGameHold();
+    this.playAgainBtn.addEventListener('click', () => this.newGame());
+    this.downloadBtn.addEventListener('click', () => this.downloadPainting());
+    this.bindDoneHold();
+    this.settingsBtn.addEventListener('click', () => this.openSettings());
+    this.closeSettingsBtn.addEventListener('click', () => this.closeSettings());
+    this.settingsOverlay.addEventListener('click', (e) => { if (e.target === this.settingsOverlay) this.closeSettings(); });
+    this.tutorialBtn.addEventListener('click', () => this.openTutorial());
+    this.closeTutorialBtn.addEventListener('click', () => this.closeTutorial());
+    this.tutorialOverlay.addEventListener('click', (e) => { if (e.target === this.tutorialOverlay) this.closeTutorial(); });
+    this.modeTallBtn.addEventListener('click', () => this.setCanvasMode('tall'));
+    this.modeWideBtn.addEventListener('click', () => this.setCanvasMode('wide'));
+
+    document.getElementById('color-row').addEventListener('click', (e) => {
+      const sw = e.target.closest('.color-swatch');
+      if (!sw) return;
+      this.color = sw.dataset.color;
+      document.querySelectorAll('.color-swatch').forEach(s => s.classList.toggle('active', s === sw));
+    });
+
+    document.getElementById('tool-row').addEventListener('click', (e) => {
+      const bb = e.target.closest('.brush-btn');
+      if (bb) {
+        this.brushSize = parseInt(bb.dataset.size, 10);
+        document.querySelectorAll('.brush-btn').forEach(b => b.classList.toggle('active', b === bb));
+        return;
+      }
+      if (e.target.closest('#undo-btn')) { this.undo(); return; }
+      if (e.target.closest('#clear-btn')) { this.clearSection(); return; }
+    });
+
+    this.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
+    this.canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
+    this.canvas.addEventListener('pointerup', (e) => this.onPointerUp(e));
+    this.canvas.addEventListener('pointercancel', (e) => this.onPointerUp(e));
+    this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    window.addEventListener('resize', () => {
+      if (this.won) return;
+      // Only re-size when the fitted A4 dimensions actually change — assigning
+      // canvas.width clears the canvas, so an unchanged resize must be skipped
+      // to avoid a blank paper with no redraw.
+      if (this.canvas.width !== this.computeCanvasSize().w) {
+        this.syncCanvasSize();
+        this.redrawCanvas();
+        this.updateCanvasOffset(false);
+      }
+    });
+  },
+
+  // New Game requires a deliberate hold, not a quick tap, so an accidental
+  // tap can't silently wipe the drawing in progress. A quick tap/keypress
+  // does nothing; only a sustained HOLD_MS hold starts a fresh round.
+  // Generic press-and-hold binding: the action only fires after the finger
+  // (or Enter/Space) is held on `btn` for HOLD_MS without moving away, guarding
+  // against an accidental tap. `render(pct)` paints the button's own progress
+  // indicator; moving past a small threshold, or lifting early, cancels.
+  bindHold(btn, onComplete, render) {
+    const HOLD_MS = 500;
+    let timer = null, raf = null, startTime = null, startPt = null, active = false;
+
+    const tick = () => {
+      const pct = Math.min(100, ((performance.now() - startTime) / HOLD_MS) * 100);
+      render(pct);
+      if (pct < 100) raf = requestAnimationFrame(tick);
+    };
+    const start = () => {
+      if (active) return;
+      active = true;
+      startTime = performance.now();
+      btn.classList.add('holding');
+      tick();
+      timer = setTimeout(() => {
+        active = false;
+        btn.classList.remove('holding');
+        if (navigator.vibrate) navigator.vibrate(40);
+        onComplete();
+      }, HOLD_MS);
+    };
+    const cancel = () => {
+      if (!active) return;
+      active = false;
+      clearTimeout(timer);
+      if (raf) cancelAnimationFrame(raf);
+      btn.classList.remove('holding');
+      render(0);
+    };
+
+    btn.addEventListener('pointerdown', (e) => { startPt = { x: e.clientX, y: e.clientY }; start(); });
+    btn.addEventListener('pointermove', (e) => {
+      if (!active || !startPt) return;
+      if (Math.hypot(e.clientX - startPt.x, e.clientY - startPt.y) > 10) cancel();
+    });
+    btn.addEventListener('pointerup', cancel);
+    btn.addEventListener('pointercancel', cancel);
+    btn.addEventListener('pointerleave', cancel);
+    btn.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) { e.preventDefault(); start(); }
+    });
+    btn.addEventListener('keyup', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') cancel();
+    });
+  },
+
+  bindNewGameHold() {
+    const ring = this.newGameBtn.querySelector('.hold-progress');
+    this.bindHold(this.newGameBtn, () => this.newGame(), (pct) => {
+      ring.style.background = pct ? `conic-gradient(rgba(148,128,220,0.85) ${pct}%, transparent ${pct}%)` : '';
+    });
+  },
+
+  bindDoneHold() {
+    const prog = this.doneBtn.querySelector('.done-progress');
+    this.bindHold(this.doneBtn, () => this.doneTapped(), (pct) => {
+      prog.style.width = pct + '%';
+    });
+  },
+
+  // Normalize pointer coords to 0..1 so strokes survive canvas resize
+  getCanvasPoint(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) / rect.width,
+      y: (e.clientY - rect.top) / rect.height
+    };
+  },
+
+  sectionTopN(idx) { return idx / this.sections; },
+  sectionBotN(idx) { return (idx + 1) / this.sections; },
+  activeSectionTopN() { return this.sectionTopN(this.currentSection); },
+  activeSectionBotN() { return this.sectionBotN(this.currentSection); },
+
+  // Convert normalized coords to canvas px
+  toCanvasY(yn) { return yn * this.canvas.height; },
+  toCanvasX(xn) { return xn * this.canvas.width; },
+
+  // Largest A4 rectangle that fits the available area — portrait (Tall mode,
+  // the default) or landscape (Wide mode). Fit width first, fall back to
+  // height so the paper never overflows or distorts.
+  computeCanvasSize() {
+    const availW = this.canvasArea.clientWidth;
+    const availH = this.canvasArea.clientHeight;
+    const ratio = this.canvasMode === 'wide' ? (297 / 210) : (210 / 297); // w / h
+    let w = availW, h = w / ratio;
+    if (h > availH) { h = availH; w = h * ratio; }
+    return { w: Math.floor(w), h: Math.floor(h) };
+  },
+
+  // Size the visible "paper" (#canvas-wrap) to that A4 rectangle so it grows to
+  // use a tablet's screen. The backing canvas is `sections` times taller than
+  // one wrap (all sections live in one canvas that slides vertically).
+  syncCanvasSize() {
+    const { w, h } = this.computeCanvasSize();
+    this.canvasWrap.style.width = w + 'px';
+    this.canvasWrap.style.height = h + 'px';
+    this.canvas.width = w;
+    this.canvas.height = h * this.sections;
+    this.canvas.style.width = w + 'px';
+    this.canvas.style.height = (h * this.sections) + 'px';
+  },
+
+  newGame() {
+    this.winActions.style.display = 'none';
+    document.getElementById('color-row').style.visibility = '';
+    document.getElementById('tool-row').style.visibility = '';
+    this.doneBtn.style.display = '';
+    this.revealCanvas.style.transition = 'none';
+    this.revealCanvas.style.opacity = '0';
+    this.currentSection = 0;
+    this.strokes = [];
+    this.allStrokes = [];
+    this.drawing = false;
+    this.currentStroke = null;
+    this.won = false;
+    this.doneInProgress = false;
+
+    this.canvas.style.transition = 'none';
+    this.canvas.style.transform = 'translateY(0)';
+    this.canvas.style.opacity = '1';
+    this.peekOverlay.style.height = '0px';
+    this.foldGuide.style.display = 'none';
+    this.nextPeekOverlay.style.height = '0px';
+    this.nextFoldGuide.style.display = 'none';
+
+    this.updateCanvasModeToggle();
+    this.syncCanvasSize();
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.updatePhaseBanner();
+    this.updateNextPeek();
+  },
+
+  updatePhaseBanner() {
+    const info = this.sectionInfo[this.currentSection];
+    this.statusEl.textContent = `Drawing the ${info.label}.`;
+  },
+
+  // Grey band pinned to the bottom of the viewport, marking this section's
+  // own tail strip — the sliver that becomes the *next* player's top peek
+  // once this section is done. Hidden once there's no next player left.
+  updateNextPeek() {
+    const show = this.currentSection < this.sections - 1;
+    this.nextPeekOverlay.style.height = show ? this.PEEK_PX + 'px' : '0px';
+    this.nextFoldGuide.style.display = show ? 'block' : 'none';
+    this.nextFoldGuide.style.bottom = this.PEEK_PX + 'px';
+  },
+
+  // Slides the canvas up so only the current section is visible in the wrap,
+  // with PEEK_PX of the previous section showing at the top as a connection guide.
+  updateCanvasOffset(animated) {
+    if (this.currentSection === 0) {
+      this.canvas.style.transition = 'none';
+      this.canvas.style.transform = 'translateY(0)';
+      this.peekOverlay.style.height = '0px';
+      this.foldGuide.style.display = 'none';
+      this.updateNextPeek();
+      return;
+    }
+    const sH = this.canvasWrap.clientHeight;  // one section = full wrap height
+    const offsetY = -(this.currentSection * sH - this.PEEK_PX);
+    this.canvas.style.transition = animated ? 'transform 0.4s ease-in-out' : 'none';
+    this.canvas.style.transform = `translateY(${offsetY}px)`;
+    this.peekOverlay.style.height = this.PEEK_PX + 'px';
+    this.foldGuide.style.display = 'block';
+    this.foldGuide.style.top = this.PEEK_PX + 'px';
+    this.updateNextPeek();
+  },
+
+  onPointerDown(e) {
+    if (this.won || this.doneInProgress) return;
+    e.preventDefault();
+    const pt = this.getCanvasPoint(e);
+    const topN = this.activeSectionTopN();
+    const botN = this.activeSectionBotN();
+    if (pt.y < topN || pt.y > botN) return;
+
+    this.canvas.setPointerCapture(e.pointerId);
+    this.drawing = true;
+    this.currentStroke = {
+      points: [pt],
+      color: this.color,
+      size: this.brushSize,
+      sectionIdx: this.currentSection
+    };
+    this.audioStrokeStart();
+
+    // Draw initial dot
+    const cx = this.toCanvasX(pt.x);
+    const cy = this.toCanvasY(pt.y);
+    this.ctx.save();
+    this.clipToSection(this.currentSection);
+    this.ctx.beginPath();
+    this.ctx.arc(cx, cy, this.brushSize / 2, 0, Math.PI * 2);
+    this.ctx.fillStyle = this.color;
+    this.ctx.fill();
+    this.ctx.restore();
+  },
+
+  onPointerMove(e) {
+    if (!this.drawing || !this.currentStroke) return;
+    const pt = this.getCanvasPoint(e);
+    const topN = this.activeSectionTopN();
+    const botN = this.activeSectionBotN();
+    const clamped = { x: pt.x, y: Math.max(topN, Math.min(botN, pt.y)) };
+    this.currentStroke.points.push(clamped);
+    this.renderLastSegment();
+  },
+
+  onPointerUp(e) {
+    if (!this.drawing || !this.currentStroke) return;
+    this.drawing = false;
+    if (this.currentStroke.points.length > 0) {
+      this.strokes.push(this.currentStroke);
+    }
+    this.currentStroke = null;
+  },
+
+  clipToSection(sectionIdx) {
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    const sH = h / this.sections;
+    this.ctx.beginPath();
+    this.ctx.rect(0, sectionIdx * sH, w, sH);
+    this.ctx.clip();
+  },
+
+  renderLastSegment() {
+    if (!this.currentStroke) return;
+    const pts = this.currentStroke.points;
+    if (pts.length < 2) return;
+
+    this.ctx.save();
+    this.clipToSection(this.currentSection);
+    this.ctx.strokeStyle = this.currentStroke.color;
+    this.ctx.lineWidth = this.currentStroke.size;
+    this.ctx.lineCap = 'round';
+    this.ctx.lineJoin = 'round';
+    this.ctx.beginPath();
+
+    const n = pts.length;
+    if (n === 2) {
+      this.ctx.moveTo(this.toCanvasX(pts[0].x), this.toCanvasY(pts[0].y));
+      this.ctx.lineTo(this.toCanvasX(pts[1].x), this.toCanvasY(pts[1].y));
+    } else {
+      const i = n - 2;
+      const mx0 = (pts[i-1].x + pts[i].x) / 2;
+      const my0 = (pts[i-1].y + pts[i].y) / 2;
+      const mx1 = (pts[i].x + pts[i+1].x) / 2;
+      const my1 = (pts[i].y + pts[i+1].y) / 2;
+      this.ctx.moveTo(this.toCanvasX(mx0), this.toCanvasY(my0));
+      this.ctx.quadraticCurveTo(
+        this.toCanvasX(pts[i].x), this.toCanvasY(pts[i].y),
+        this.toCanvasX(mx1), this.toCanvasY(my1)
+      );
+    }
+    this.ctx.stroke();
+    this.ctx.restore();
+  },
+
+  undo() {
+    if (this.strokes.length === 0) return;
+    this.strokes.pop();
+    this.audioSwoosh();
+    this.redrawCanvas();
+  },
+
+  clearSection() {
+    if (this.strokes.length === 0 && !this.currentStroke) return;
+    this.drawing = false;
+    this.currentStroke = null;
+    this.strokes = [];
+    this.audioSwoosh();
+    this.redrawCanvas();
+  },
+
+  redrawCanvas() {
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.allStrokes.forEach(s => this.drawStroke(s));
+    this.strokes.forEach(s => this.drawStroke(s));
+    // A stroke being drawn (e.g. when a rotation resize triggers a redraw
+    // mid-gesture) must survive too — it isn't in `strokes` yet.
+    if (this.currentStroke) this.drawStroke(this.currentStroke);
+  },
+
+  drawStroke(stroke) {
+    const pts = stroke.points;
+    if (pts.length === 0) return;
+    const si = stroke.sectionIdx !== undefined ? stroke.sectionIdx : this.currentSection;
+
+    this.ctx.save();
+    this.clipToSection(si);
+
+    if (pts.length === 1) {
+      this.ctx.beginPath();
+      this.ctx.arc(this.toCanvasX(pts[0].x), this.toCanvasY(pts[0].y), stroke.size / 2, 0, Math.PI * 2);
+      this.ctx.fillStyle = stroke.color;
+      this.ctx.fill();
+    } else {
+      this.ctx.strokeStyle = stroke.color;
+      this.ctx.lineWidth = stroke.size;
+      this.ctx.lineCap = 'round';
+      this.ctx.lineJoin = 'round';
+      this.ctx.beginPath();
+      this.ctx.moveTo(this.toCanvasX(pts[0].x), this.toCanvasY(pts[0].y));
+      for (let i = 1; i < pts.length - 1; i++) {
+        const mx = (pts[i].x + pts[i+1].x) / 2;
+        const my = (pts[i].y + pts[i+1].y) / 2;
+        this.ctx.quadraticCurveTo(
+          this.toCanvasX(pts[i].x), this.toCanvasY(pts[i].y),
+          this.toCanvasX(mx), this.toCanvasY(my)
+        );
+      }
+      const last = pts[pts.length - 1];
+      this.ctx.lineTo(this.toCanvasX(last.x), this.toCanvasY(last.y));
+      this.ctx.stroke();
+    }
+    this.ctx.restore();
+  },
+
+  doneTapped() {
+    if (this.won || this.doneInProgress) return;
+    this.doneInProgress = true;
+
+    // Finalize any in-progress stroke
+    if (this.currentStroke && this.currentStroke.points.length > 0) {
+      this.strokes.push(this.currentStroke);
+      this.currentStroke = null;
+      this.drawing = false;
+    }
+
+    // Commit current section strokes to the permanent record
+    this.allStrokes.push(...this.strokes);
+    this.strokes = [];
+
+    const isLast = (this.currentSection + 1) >= this.sections;
+    this.audioSwoosh();
+
+    if (isLast) {
+      setTimeout(() => this.reveal(), 100);
+    } else {
+      // Animate canvas upward, showing peek strip + next section
+      const nextSection = this.currentSection + 1;
+      const sH = this.canvasWrap.clientHeight;
+      const offsetY = -(nextSection * sH - this.PEEK_PX);
+      this.canvas.style.transition = 'transform 0.4s ease-in-out';
+      this.canvas.style.transform = `translateY(${offsetY}px)`;
+      this.peekOverlay.style.height = this.PEEK_PX + 'px';
+      this.foldGuide.style.display = 'block';
+      this.foldGuide.style.top = this.PEEK_PX + 'px';
+
+      setTimeout(() => {
+        this.currentSection++;
+        this.updatePhaseBanner();
+        this.updateCanvasOffset(false);
+        this.doneInProgress = false;
+      }, 460);
+    }
+  },
+
+  reveal() {
+    this.won = true;
+    this.foldGuide.style.display = 'none';
+    this.peekOverlay.style.height = '0px';
+    this.nextFoldGuide.style.display = 'none';
+    this.nextPeekOverlay.style.height = '0px';
+
+    // Render the full stacked artwork onto an offscreen buffer at the same
+    // aspect ratio as the drawing canvas (undistorted — strokes are
+    // normalized against sections × wrapHeight), then letterbox-scale that
+    // buffer into the wrap-sized reveal overlay. Stretching x and y by
+    // different factors (drawing straight onto a wrap-sized canvas) is what
+    // squished the figure before.
+    const wrapW = this.canvasWrap.clientWidth;
+    const wrapH = this.canvasWrap.clientHeight;
+    const buffer = document.createElement('canvas');
+    buffer.width = wrapW;
+    buffer.height = wrapH * this.sections;
+
+    const savedCanvas = this.canvas;
+    const savedCtx    = this.ctx;
+    this.canvas = buffer;
+    this.ctx    = buffer.getContext('2d');
+    this.redrawCanvas();
+    this.canvas = savedCanvas;
+    this.ctx    = savedCtx;
+    this.artworkCanvas = buffer;
+
+    const rc = this.revealCanvas;
+    rc.width  = wrapW;
+    rc.height = wrapH;
+    const scale = Math.min(wrapW / buffer.width, wrapH / buffer.height);
+    const drawW = buffer.width * scale;
+    const drawH = buffer.height * scale;
+    const rctx = rc.getContext('2d');
+    // Opaque paper background — the reveal overlay must fully cover the
+    // drawing canvas behind it (still translated to the last section),
+    // which otherwise shows through around the letterboxed artwork.
+    rctx.fillStyle = '#fff';
+    rctx.fillRect(0, 0, rc.width, rc.height);
+    rctx.drawImage(buffer, (wrapW - drawW) / 2, (wrapH - drawH) / 2, drawW, drawH);
+
+    // Fade in the overlay
+    rc.style.transition = 'opacity 0.7s ease-in';
+    rc.style.opacity = '1';
+
+    setTimeout(() => {
+      this.audioWin();
+      this.showWin();
+    }, 750);
+  },
+
+  showWin() {
+    document.getElementById('color-row').style.visibility = 'hidden';
+    document.getElementById('tool-row').style.visibility = 'hidden';
+    this.doneBtn.style.display = 'none';
+    this.winActions.style.display = 'flex';
+    this.statusEl.textContent = 'Finished! Your creature is revealed.';
+  },
+
+  downloadPainting() {
+    const a = document.createElement('a');
+    a.href = this.artworkCanvas.toDataURL('image/png');
+    a.download = 'fold-and-pass.png';
+    a.click();
+  },
+
+  openSettings()  { this.settingsOverlay.classList.add('show'); Modal.open(this.settingsOverlay, () => this.closeSettings()); },
+  closeSettings() { this.settingsOverlay.classList.remove('show'); Modal.close(); },
+
+  openTutorial()  { this.tutorialOverlay.classList.add('show'); Modal.open(this.tutorialOverlay, () => this.closeTutorial()); },
+  closeTutorial() { this.tutorialOverlay.classList.remove('show'); Modal.close(); },
+
+  setCanvasMode(mode) {
+    if (this.canvasMode === mode) { this.closeSettings(); return; }
+    this.canvasMode = mode;
+    this.updateCanvasModeToggle();
+    this.closeSettings();
+    // Preserve the drawing in progress (design principle 9 — changing a
+    // setting shouldn't break game state unexpectedly). Strokes are stored
+    // as normalized 0..1 coordinates, the same mechanism that already
+    // survives a window resize, so resizing the canvas for the new aspect
+    // and redrawing is enough — nothing needs to reset.
+    this.syncCanvasSize();
+    this.redrawCanvas();
+    this.updateCanvasOffset(false);
+  },
+
+  updateCanvasModeToggle() {
+    const tall = this.canvasMode === 'tall';
+    this.modeTallBtn.classList.toggle('selected', tall);
+    this.modeWideBtn.classList.toggle('selected', !tall);
+    this.modeTallBtn.setAttribute('aria-checked', tall ? 'true' : 'false');
+    this.modeWideBtn.setAttribute('aria-checked', tall ? 'false' : 'true');
+  },
+
+  setupPWA() {
+    // The whole toybox is one PWA: a single shared manifest
+    // (../manifest.webmanifest, linked in <head>) and one root-scoped
+    // service worker. Browsers reject blob:/data: worker scripts and
+    // file:// has no SW support, so register only over http(s).
+    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+      navigator.serviceWorker.register('../sw.js').then((root) => {
+        // Drop any old per-game worker from before unification so the one
+        // root worker controls this page (longest scope wins).
+        navigator.serviceWorker.getRegistrations().then((regs) =>
+          regs.forEach((r) => {
+            if (r !== root && r.scope.startsWith(root.scope) && r.scope !== root.scope) r.unregister();
+          })
+        );
+      }).catch(() => {});
+    }
+  },
+
+  ensureAudio() {
+    if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (this.audioCtx.state === 'suspended') this.audioCtx.resume();
+  },
+
+  playTone({ type = 'sine', freq = 440, duration = 100, startGain = 0.0001, peakGain = 0.15 }) {
+    this.ensureAudio();
+    const ctx = this.audioCtx;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    gain.gain.setValueAtTime(startGain, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(peakGain, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration / 1000);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + duration / 1000 + 0.02);
+  },
+
+  audioStrokeStart() {
+    this.playTone({ type: 'sine', freq: 600, duration: 20, peakGain: 0.05 });
+  },
+
+  audioSwoosh() {
+    this.ensureAudio();
+    const ctx = this.audioCtx;
+    const n = Math.floor(ctx.sampleRate * 0.1);
+    const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.1);
+    src.connect(gain).connect(ctx.destination);
+    src.start();
+  },
+
+  audioWin() {
+    [523.25, 659.25, 783.99].forEach((freq, i) => {
+      setTimeout(() => this.playTone({ type: 'sine', freq, duration: 220, peakGain: 0.18 }), i * 180);
+    });
+  }
+};
+
+App.init();
+</script>
+</body>
+</html>

@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<!-- LibreToybox — Mini-Sudoku · Licensed under the GNU GPL v3.0; see ../LICENSE -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mini-Sudoku</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪁</text></svg>" />
+  <link rel="manifest" href="../manifest.webmanifest" />
+  <meta name="theme-color" content="#DE7F66" />
+  <style>
+    :root {
+      --bg1: #FFF8E7;
+      --bg2: #FFE4B5;
+      /* Accent is canonical coral (Shape Fit palette edge) — warm, so it sits
+         in Sudoku's gold/cream background family (design principle 11). */
+      --accent: #DE7F66;
+      --given: #E8E8E8;
+      --cell: #FFFFFF;
+      --border: #B0C4DE;
+      --text: #4A443E;
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    /* min-height, not height: layout() sizes the board so everything fits
+       the viewport, and if it can't (a board at LAYOUT.minCellPx still too
+       big) the page simply grows and scrolls instead of clipping the pad. */
+    html, body { margin: 0; padding: 0; min-height: 100%; }
+    /* Own background on html stops the body gradient propagating to the
+       canvas, where it would tile — rubber-band overscroll then shows the
+       wrong end of the gradient instead of blending with the page. */
+    html { background: var(--bg1); }
+    body {
+      font-family: ui-rounded, 'Hiragino Maru Gothic ProN', Quicksand, Comfortaa, 'Arial Rounded MT Bold', 'Varela Round', Calibri, sans-serif;
+      background: linear-gradient(180deg, var(--bg1), var(--bg2));
+      color: var(--text);
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      overflow-x: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+
+    header {
+      width: 100%;
+      /* Grows with a big tablet board so the buttons line up with its edges. */
+      max-width: max(420px, var(--board-w, 0px));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px 6px;
+    }
+    .header-left { display: flex; align-items: center; gap: 8px; }
+    .logo { display: flex; align-items: center; }
+    .top-btns { display: flex; gap: 8px; }
+    .top-btn {
+      position: relative;
+      background: #fff;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 6px 10px;
+      font-family: inherit;
+      font-size: 1.3rem;
+      cursor: pointer;
+      box-shadow: 0 3px 0 #dbe3ef;
+      transition: transform .05s;
+      min-width: 48px;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      color: inherit;
+    }
+    .top-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #dbe3ef; }
+    /* New Game requires a deliberate hold (not a quick tap) so an accidental
+       tap can't silently wipe the board — same pie-wedge mechanic as the
+       per-cell .press-progress delete gesture below, just retargeted onto
+       this button. */
+    .hold-progress { position: absolute; inset: 5px; border-radius: 50%; pointer-events: none; opacity: 0; transition: opacity .1s; }
+    .top-btn.holding .hold-progress { opacity: 1; }
+
+    /* main takes the height left under the header and centres the board +
+       pad group in it. layout() picks the arrangement and the cell size. */
+    main { width: 100%; flex: 1 0 auto; padding: 8px 12px 18px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+
+    /* Side layout (body.side, set by layout() when it gives bigger cells —
+       landscape phones and tablets): the header becomes a column on the
+       left, 🏠 still in the top-left corner, and the pad sits right of the
+       board. Scoped to header so the win overlay's .top-btns stay a row. */
+    body.side { flex-direction: row; align-items: stretch; }
+    body.side header { flex-direction: column; width: auto; max-width: none; padding: 12px 0 12px 12px; }
+    body.side header .header-left,
+    body.side header .top-btns { flex-direction: column; }
+    body.side main { flex: 1 1 auto; flex-direction: row; padding: 12px; }
+
+    /* Every cell is the same --cell-size square. Box seams are their own grid
+       tracks (--seam wide, with a .seam line through the middle), so the
+       wider gutter between boxes never eats into a cell. layout() sets
+       --cell-size, init() sets --gap and --seam, and buildGrid() sets the
+       track templates. (--cell is the cell fill colour, in :root.) */
+    .grid-wrap {
+      touch-action: none; /* keep pointer events flowing during long-press */
+      flex: 0 0 auto;
+      background: #fff;
+      border: 4px solid #7A8BA6;
+      border-radius: 14px;
+      padding: 6px;
+      box-shadow: 0 8px 22px rgba(0,0,0,0.12);
+      display: grid;
+      gap: var(--gap);
+    }
+    .seam { background: #5D7290; border-radius: 2px; pointer-events: none; }
+    .seam.v { justify-self: center; width: 4px; }
+    .seam.h { align-self: center; height: 4px; }
+
+    .cell {
+      position: relative;
+      background: var(--cell);
+      border: 1px solid var(--border);
+      border-radius: clamp(5px, calc(var(--cell-size) * 0.16), 12px);
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      /* Digits scale with the cell: half its side reads at a glance on a
+         32 px phone cell and a 96 px tablet cell alike. */
+      font-size: calc(var(--cell-size) * 0.5);
+      line-height: 1;
+      cursor: pointer;
+      transition: background .15s, transform .1s;
+    }
+    .cell.given { background: var(--given); font-weight: bold; cursor: default; }
+    .cell.selected { outline: 4px solid var(--accent); outline-offset: -4px; background: #FDEBE5; z-index: 2; }
+    .cell:focus-visible { outline: 3px solid var(--text); outline-offset: -3px; z-index: 2; }
+    .cell.conflict { background: #FFCDD2; color: #C62828; animation: flashShake .5s ease-in-out; }
+    .cell.just-placed { animation: pop .25s ease-out; }
+    .cell.cleared { animation: suction .22s ease-in; }
+
+    /* layout() sets --pad-cols: one or two rows under the board, or one or
+       two columns beside it, whichever leaves the biggest cells. */
+    .pad {
+      flex: 0 0 auto;
+      display: grid;
+      grid-template-columns: repeat(var(--pad-cols, 4), var(--tool));
+      justify-content: center;
+      gap: var(--tool-gap);
+    }
+    .tool {
+      width: var(--tool);
+      height: var(--tool);
+      border: none;
+      border-radius: calc(var(--tool) * 0.25);
+      font-family: inherit;
+      font-size: calc(var(--tool) * 0.45);
+      font-weight: bold;
+      text-shadow: none;
+      cursor: pointer;
+      box-shadow: 0 5px 0 rgba(0,0,0,0.15);
+      transition: transform .05s, box-shadow .05s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .tool:active { transform: translateY(3px); box-shadow: 0 2px 0 rgba(0,0,0,0.15); }
+    .tool.active { box-shadow: 0 0 0 4px var(--accent), 0 5px 0 rgba(0,0,0,0.15); }
+    /* touch-action:none so dragging a digit up from the pad onto the grid
+       doesn't scroll the page mid-gesture (drag-to-place, see bindPadDrag). */
+    .tool { touch-action: none; }
+    /* A digit being dragged from the pad rides under the finger — a clone of
+       the pad button, lifted and shadowed, tracking the pointer. */
+    .drag-digit {
+      position: fixed;
+      z-index: 200;
+      pointer-events: none;
+      transform: translate(-50%, -50%) scale(1.05);
+      box-shadow: 0 8px 16px rgba(0,0,0,0.28);
+    }
+    /* Cell currently under a dragged digit — same highlight as a tapped
+       selection, so "this is where it lands" reads identically either way. */
+    .cell.drag-over { outline: 4px solid var(--accent); outline-offset: -4px; background: #FDEBE5; z-index: 2; }
+    /* All eight digits use the canonical pastel set with darker same-hue text
+       and no text-shadow (design principle 11) — one treatment across the whole
+       pad, so a 6×6 or 8×8 board never mixes saturated inks with pastels. */
+    .tool.t1 { background: #F7A6B9; color: #A34860; }
+    .tool.t2 { background: #F9C784; color: #96601C; }
+    .tool.t3 { background: #FFE66D; color: #7A6408; }
+    .tool.t4 { background: #A8E6CF; color: #3D6B55; }
+    .tool.t5 { background: #8ED3F4; color: #2F6C93; }
+    .tool.t6 { background: #C3B4F7; color: #5F4EA0; }
+    .tool.t7 { background: #FFB3A0; color: #A34F38; }
+    .tool.t8 { background: #C8E88A; color: #5A7A24; }
+
+    /* Visually hidden but available to screen readers (aria-live announcements
+       still fire). Standard clip-based sr-only pattern. */
+    .status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+    .press-progress { position: absolute; inset: 6px; border-radius: 50%; pointer-events: none; opacity: 0; transform: scale(0.85); transition: opacity .1s; }
+    .cell.pressing .press-progress { opacity: 1; }
+
+    @keyframes pop { 0% { transform: scale(1); } 50% { transform: scale(1.18); } 100% { transform: scale(1); } }
+    @keyframes suction { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(0.1); opacity: 0; } }
+    @keyframes fall { 0% { transform: translateY(-10vh) rotate(0deg); opacity: 1; } 100% { transform: translateY(110vh) rotate(720deg); opacity: 0; } }
+    @keyframes bounce { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-18px); } }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      text-align: center;
+      padding: 20px;
+    }
+    .overlay.show { display: flex; }
+    /* Translucent win overlay so the solved puzzle stays visible beneath
+       the celebration (same pattern as Memory and Shape Fit). */
+    #win-overlay { background: rgba(255,255,255,0.55); justify-content: flex-end; padding-bottom: 12vh; }
+    #settings-overlay, #tutorial-overlay { background: rgba(255,255,255,0.92); }
+    .emoji-row { font-size: 4.5rem; display: flex; gap: 18px; margin-bottom: 22px; }
+
+    .ghost-digit {
+      position: fixed;
+      left: var(--gx);
+      top: var(--gy);
+      font-size: calc(var(--cell-size) * 0.5);
+      color: var(--text);
+      text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      pointer-events: none;
+      z-index: 200;
+      animation: ghostFly 500ms ease-in forwards;
+    }
+
+    .settings-card {
+      background: #fff;
+      border: 3px solid var(--border);
+      border-radius: 18px;
+      padding: 22px 26px;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.15);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      min-width: 260px;
+    }
+    .settings-card h2 { margin: 0; font-size: 2rem; }
+    .size-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 18px; }
+    .size-btn {
+      width: 72px;
+      height: 72px;
+      border: 2px solid var(--border);
+      border-radius: 16px;
+      background: #fff;
+      font-family: inherit;
+      font-size: 1.7rem;
+      cursor: pointer;
+      box-shadow: 0 4px 0 #dbe3ef;
+      transition: transform .05s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      color: var(--text);
+    }
+    .size-btn small { font-size: 0.8rem; }
+    .size-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #dbe3ef; }
+    .size-btn.active { box-shadow: 0 0 0 4px var(--accent), 0 4px 0 #dbe3ef; }
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      font-size: 1.1rem;
+      gap: 16px;
+    }
+    .toggle-btn {
+      width: 56px;
+      height: 30px;
+      border-radius: 15px;
+      border: none;
+      background: #ccc;
+      position: relative;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .toggle-btn.active { background: var(--accent); }
+    .toggle-thumb {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform .2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .toggle-btn.active .toggle-thumb { transform: translateX(26px); }
+    .setting-label { display: flex; flex-direction: column; gap: 2px; text-align: left; }
+    .setting-hint { margin: 0; font-size: 0.85rem; color: #888; }
+    @keyframes ghostFly {
+      0% { left: var(--gx); top: var(--gy); transform: translate(-50%, -50%) scale(1); opacity: 1; }
+      100% { left: var(--tx); top: var(--ty); transform: translate(-50%, -50%) scale(0.3); opacity: 0; }
+    }
+    @keyframes flashShake {
+      0%, 100% { background: var(--cell); transform: translateX(0); }
+      20% { background: #FFCDD2; transform: translateX(-5px); }
+      40% { background: #FFCDD2; transform: translateX(5px); }
+      60% { background: #FFCDD2; transform: translateX(-5px); }
+      80% { background: #FFCDD2; transform: translateX(5px); }
+    }
+    .emoji-row button { background: none; border: none; padding: 0; font: inherit; cursor: pointer; animation: pop .6s ease-out forwards; }
+    .emoji-row button:nth-child(2) { animation-delay: .15s; }
+    .emoji-row button:nth-child(3) { animation-delay: .3s; }
+    .emoji-row button:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; border-radius: 12px; }
+    .emoji-row button.wiggle { animation: wiggle .5s ease; }
+    @keyframes wiggle { 0%, 100% { transform: rotate(0) scale(1); } 25% { transform: rotate(-12deg) scale(1.25); } 55% { transform: rotate(9deg) scale(1.12); } 80% { transform: rotate(-4deg) scale(1.04); } }
+    .confetti { position: fixed; top: 0; left: 0; width: 10px; height: 10px; pointer-events: none; z-index: 101; animation: fall linear forwards; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <a class="top-btn" id="back-btn" href="../index.html" aria-label="Back to LibreToybox home">🏠</a>
+      <div class="logo" role="img" aria-label="Mini-Sudoku" title="Mini-Sudoku">
+      <svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true">
+        <rect x="4" y="4" width="40" height="40" rx="8" fill="#DE7F66"/>
+        <rect x="10" y="10" width="28" height="28" rx="4" fill="none" stroke="#fff" stroke-width="2.5"/>
+        <line x1="24" y1="10" x2="24" y2="38" stroke="#fff" stroke-width="2"/>
+        <line x1="10" y1="24" x2="38" y2="24" stroke="#fff" stroke-width="2"/>
+        <text x="24" y="31" text-anchor="middle" font-family="Arial Rounded MT Bold, Arial, sans-serif" font-size="14" fill="#fff">4</text>
+      </svg>
+      </div>
+    </div>
+    <div class="top-btns">
+      <button class="top-btn" id="new-game" aria-label="New Game">🔄<span class="hold-progress" aria-hidden="true"></span></button>
+      <button class="top-btn" id="settings-btn" aria-label="Settings">⚙️</button>
+      <button class="top-btn" id="tutorial-btn" aria-label="How to Play">❓</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="status" id="status" aria-live="polite"></div>
+    <div class="grid-wrap" id="grid" role="grid" aria-label="Sudoku grid"></div>
+    <div class="pad" id="pad" role="toolbar" aria-label="Number pad"></div>
+  </main>
+
+  <div class="overlay" id="win-overlay" role="dialog" aria-modal="true" aria-label="You won">
+    <div class="emoji-row" id="emoji-row"></div>
+    <div class="top-btns">
+      <a class="top-btn" id="win-home-btn" href="../index.html" aria-label="Back to LibreToybox home">🏠</a>
+      <button class="top-btn" id="play-again" aria-label="Play Again">🔄</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="settings-overlay" role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="settings-card">
+      <h2>⚙️</h2>
+      <div class="size-row" role="radiogroup" aria-label="Board size">
+        <button class="size-btn" data-size="small" role="radio" aria-label="Easy, 4 by 4, numbers 1 to 4">🐣<small>1–4</small></button>
+        <button class="size-btn" data-size="medium" role="radio" aria-label="Normal, 6 by 6, numbers 1 to 6">🕊️<small>1–6</small></button>
+        <button class="size-btn" data-size="large" role="radio" aria-label="Hard, 8 by 8, numbers 1 to 8">🦅<small>1–8</small></button>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">
+          <span>Wrong numbers</span>
+          <p class="setting-hint" id="mode-hint">Wrong or clashing numbers fly back to the pad</p>
+        </div>
+        <button class="toggle-btn" id="mode-toggle" aria-label="Toggle wrong number behavior">
+          <span class="toggle-thumb"></span>
+        </button>
+      </div>
+      <button class="top-btn" id="close-settings" aria-label="Close">✕</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="tutorial-overlay" role="dialog" aria-modal="true" aria-label="How to Play">
+    <div class="settings-card">
+      <h2>🎓</h2>
+      <p>Tutorial coming soon!</p>
+      <button class="top-btn" id="close-tutorial" aria-label="Close">✕</button>
+    </div>
+  </div>
+
+  <script>
+    // Board sizes: n×n grid with boxR×boxC boxes, digits 1..n. The givens
+    // target keeps ~50% of cells filled at every size — the difficulty step
+    // comes from the board itself, not from sparser starts.
+    const SIZES = {
+      small:  { n: 4, boxR: 2, boxC: 2, givens: 8 },
+      medium: { n: 6, boxR: 2, boxC: 3, givens: 18 },
+      large:  { n: 8, boxR: 2, boxC: 4, givens: 32 }
+    };
+
+    // Board and pad geometry for layout(), published as CSS variables.
+    // Cells are always square and sized to the viewport between minCellPx
+    // and maxCellPx; maxBoardPx stops an 8×8 board swallowing a desktop
+    // screen. seamPx is the gutter track between boxes. Pad buttons are
+    // toolPx (principle 4: at least 64 px) and grow with the cells on a big
+    // screen, up to maxToolPx.
+    const LAYOUT = {
+      gapPx: 2, seamPx: 10,
+      minCellPx: 28, maxCellPx: 96, maxBoardPx: 640,
+      toolPx: 64, maxToolPx: 88, toolGapPx: 10, toolShadowPx: 5
+    };
+
+    // Celebration grows with difficulty — Easy is today's unchanged baseline,
+    // Normal/Hard add more confetti and extra rising notes on the same fanfare.
+    const CELEBRATION_TIERS = [
+      { confetti: 60,  notes: [523.25, 659.25, 783.99] },
+      { confetti: 90,  notes: [523.25, 659.25, 783.99, 1046.50] },
+      { confetti: 130, notes: [523.25, 659.25, 783.99, 1046.50, 1318.51] }
+    ];
+
+    // --- Shared modal a11y helper (copied into each game — the suite ships no
+    // bundler). Moves focus into an opened overlay, traps Tab within it, closes
+    // on Escape, and restores focus to the opener on close (design principle 8). ---
+    const Modal = {
+      opener: null, overlay: null, onDismiss: null, handler: null,
+      focusable(el) {
+        return [...el.querySelectorAll('a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+          .filter(n => n.getClientRects().length > 0);
+      },
+      open(overlay, onDismiss) {
+        this.opener = document.activeElement;
+        this.overlay = overlay;
+        this.onDismiss = onDismiss || null;
+        const items = this.focusable(overlay);
+        (items[0] || overlay).focus({ preventScroll: true });
+        this.handler = (e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            if (this.onDismiss) this.onDismiss(); else this.close();
+          } else if (e.key === 'Tab') {
+            const f = this.focusable(overlay);
+            if (!f.length) { e.preventDefault(); return; }
+            const first = f[0], last = f[f.length - 1];
+            if (e.shiftKey && (document.activeElement === first || !overlay.contains(document.activeElement))) {
+              e.preventDefault(); last.focus();
+            } else if (!e.shiftKey && (document.activeElement === last || !overlay.contains(document.activeElement))) {
+              e.preventDefault(); first.focus();
+            }
+          }
+        };
+        document.addEventListener('keydown', this.handler, true);
+      },
+      close() {
+        if (this.handler) document.removeEventListener('keydown', this.handler, true);
+        this.handler = null;
+        const opener = this.opener;
+        this.opener = this.overlay = this.onDismiss = null;
+        if (opener && opener.focus) opener.focus({ preventScroll: true });
+      }
+    };
+
+    const App = {
+      solution: [],
+      puzzle: [],
+      playGrid: [],
+      givenMask: [],
+      size: 'small',
+      n: 4,
+      boxR: 2,
+      boxC: 2,
+      selected: null,
+      activeTool: null,
+      won: false,
+      audioCtx: null,
+      lastTapTime: 0,
+      longPressTimer: null,
+      longPressTarget: null,
+      longPressStart: null,
+      pressProgressCell: null,
+      pressProgressStart: 0,
+      pressProgressRAF: null,
+      keepWrong: false,
+      emojiSets: [
+        ['🎉', '🌟', '🏆'],
+        ['🎈', '🌈', '🎊'],
+        ['🥳', '✨', '🍭']
+      ],
+
+      init() {
+        this.cacheDOM();
+        const root = document.documentElement.style;
+        root.setProperty('--gap', LAYOUT.gapPx + 'px');
+        root.setProperty('--seam', LAYOUT.seamPx + 'px');
+        root.setProperty('--tool-gap', LAYOUT.toolGapPx + 'px');
+        this.bindEvents();
+        this.newGame();
+        this.setupPWA();
+      },
+
+      cacheDOM() {
+        this.header = document.querySelector('header');
+        this.main = document.querySelector('main');
+        this.grid = document.getElementById('grid');
+        this.pad = document.getElementById('pad');
+        this.status = document.getElementById('status');
+        this.overlay = document.getElementById('win-overlay');
+        this.newGameBtn = document.getElementById('new-game');
+        this.playAgainBtn = document.getElementById('play-again');
+        this.settingsOverlay = document.getElementById('settings-overlay');
+        this.settingsBtn = document.getElementById('settings-btn');
+        this.closeSettingsBtn = document.getElementById('close-settings');
+        this.modeToggle = document.getElementById('mode-toggle');
+        this.modeHint = document.getElementById('mode-hint');
+        this.tutorialOverlay = document.getElementById('tutorial-overlay');
+        this.tutorialBtn = document.getElementById('tutorial-btn');
+        this.closeTutorialBtn = document.getElementById('close-tutorial');
+      },
+
+      bindEvents() {
+        this.bindNewGameHold();
+        this.playAgainBtn.addEventListener('click', () => this.newGame());
+        this.settingsBtn.addEventListener('click', () => this.openSettings());
+        this.closeSettingsBtn.addEventListener('click', () => this.closeSettings());
+        this.modeToggle.addEventListener('click', () => this.toggleMode());
+        this.settingsOverlay.addEventListener('click', (e) => {
+          if (e.target === this.settingsOverlay) this.closeSettings();
+        });
+        this.tutorialBtn.addEventListener('click', () => this.openTutorial());
+        this.closeTutorialBtn.addEventListener('click', () => this.closeTutorial());
+        this.tutorialOverlay.addEventListener('click', (e) => {
+          if (e.target === this.tutorialOverlay) this.closeTutorial();
+        });
+        this.settingsOverlay.querySelectorAll('.size-btn').forEach(btn => {
+          btn.addEventListener('click', () => this.setSize(btn.dataset.size));
+        });
+
+        this.pad.addEventListener('click', (e) => {
+          // A drag-to-place gesture can synthesize a trailing click on the pad
+          // button it started from; swallow it so a drag doesn't also arm the
+          // tapped-digit selection (bindPadDrag sets the flag; the next real
+          // pointerdown clears any stale value).
+          if (this.suppressPadClick) { this.suppressPadClick = false; return; }
+          const t = e.target.closest('.tool');
+          if (!t) return;
+          this.setTool(t.dataset.tool);
+          if (this.selected) {
+            this.tryPlace(this.selected.r, this.selected.c, parseInt(this.activeTool, 10));
+            this.deselect();
+          }
+        });
+
+        this.bindPadDrag();
+
+        // Pointer Events cover mouse, touch and pen with a single stream —
+        // no synthetic-mouse-event double firing after taps.
+        const start = (e) => {
+          const cell = e.target.closest('.cell');
+          if (!cell) return;
+          const r = parseInt(cell.dataset.r, 10);
+          const c = parseInt(cell.dataset.c, 10);
+          this.longPressTarget = { r, c, el: cell };
+          this.longPressStart = { x: e.clientX, y: e.clientY };
+          if (!this.givenMask[r][c] && this.playGrid[r][c] !== 0) {
+            this.showPressProgress(cell);
+          }
+          this.longPressTimer = setTimeout(() => {
+            if (this.longPressTarget && !this.givenMask[r][c] && this.playGrid[r][c] !== 0) {
+              this.hidePressProgress();
+              this.clearCell(r, c);
+              if (navigator.vibrate) navigator.vibrate(40);
+            }
+            this.longPressTarget = null;
+          }, 500);
+        };
+
+        const move = (e) => {
+          if (!this.longPressTarget || !this.longPressStart) return;
+          if (Math.hypot(e.clientX - this.longPressStart.x, e.clientY - this.longPressStart.y) > 10) {
+            clearTimeout(this.longPressTimer);
+            this.hidePressProgress();
+            this.longPressTarget = null;
+          }
+        };
+
+        const end = () => {
+          clearTimeout(this.longPressTimer);
+          this.hidePressProgress();
+          if (!this.longPressTarget) return;
+          const r = this.longPressTarget.r;
+          const c = this.longPressTarget.c;
+          this.longPressTarget = null;
+
+          // Debounce rapid taps
+          const now = Date.now();
+          const key = `${r},${c}`;
+          if (this.lastTapTime && now - this.lastTapTime < 150 && this.lastTapCell === key) return;
+          this.lastTapTime = now;
+          this.lastTapCell = key;
+
+          this.activateCell(r, c);
+        };
+
+        const cancel = () => {
+          clearTimeout(this.longPressTimer);
+          this.hidePressProgress();
+          this.longPressTarget = null;
+        };
+
+        this.grid.addEventListener('pointerdown', start);
+        this.grid.addEventListener('pointermove', move);
+        this.grid.addEventListener('pointerup', end);
+        this.grid.addEventListener('pointercancel', cancel);
+        this.grid.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        // Keyboard parity (design principle 8): cells are tabbable
+        // (renderGrid sets tabIndex on non-given cells); Enter/Space
+        // activates the focused cell exactly like a tap.
+        this.grid.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          const cell = e.target.closest('.cell');
+          if (!cell) return;
+          e.preventDefault();
+          this.activateCell(parseInt(cell.dataset.r, 10), parseInt(cell.dataset.c, 10));
+        });
+
+        // Rotation and resizing re-run layout(), rAF-debounced so a burst of
+        // resize events (an address bar collapsing) solves once.
+        let relayout = null;
+        const onViewportChange = () => {
+          if (relayout) return;
+          relayout = requestAnimationFrame(() => { relayout = null; this.layout(); });
+        };
+        window.addEventListener('resize', onViewportChange);
+        window.addEventListener('orientationchange', onViewportChange);
+      },
+
+      // New Game requires a deliberate hold (not a quick tap) so an
+      // accidental tap can't silently wipe the board — same pie-wedge
+      // mechanic as the per-cell long-press above, retargeted onto this
+      // button. A quick tap/keypress does nothing; only a sustained
+      // HOLD_MS hold fires newGame().
+      bindNewGameHold() {
+        const HOLD_MS = 500;
+        const btn = this.newGameBtn;
+        const ring = btn.querySelector('.hold-progress');
+        let timer = null, raf = null, startTime = null, startPt = null, active = false;
+
+        const tick = () => {
+          const pct = Math.min(100, ((performance.now() - startTime) / HOLD_MS) * 100);
+          ring.style.background = `conic-gradient(rgba(222,127,102,0.85) ${pct}%, transparent ${pct}%)`;
+          if (pct < 100) raf = requestAnimationFrame(tick);
+        };
+        const start = () => {
+          if (active) return;
+          active = true;
+          startTime = performance.now();
+          btn.classList.add('holding');
+          tick();
+          timer = setTimeout(() => {
+            active = false;
+            btn.classList.remove('holding');
+            if (navigator.vibrate) navigator.vibrate(40);
+            this.newGame();
+          }, HOLD_MS);
+        };
+        const cancel = () => {
+          if (!active) return;
+          active = false;
+          clearTimeout(timer);
+          if (raf) cancelAnimationFrame(raf);
+          btn.classList.remove('holding');
+          ring.style.background = '';
+        };
+
+        btn.addEventListener('pointerdown', (e) => { startPt = { x: e.clientX, y: e.clientY }; start(); });
+        btn.addEventListener('pointermove', (e) => {
+          if (!active || !startPt) return;
+          if (Math.hypot(e.clientX - startPt.x, e.clientY - startPt.y) > 10) cancel();
+        });
+        btn.addEventListener('pointerup', cancel);
+        btn.addEventListener('pointercancel', cancel);
+        btn.addEventListener('pointerleave', cancel);
+        btn.addEventListener('keydown', (e) => {
+          if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) { e.preventDefault(); start(); }
+        });
+        btn.addEventListener('keyup', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') cancel();
+        });
+      },
+
+      // Drag-to-place: press a pad digit and drag it straight onto a cell, as
+      // an alternative to the select-cell-then-digit flow. A short press that
+      // never crosses the drag threshold falls through to the pad's click
+      // handler (tap-to-select), so both input styles coexist. Keyboard parity
+      // is unaffected — it still uses the select/place path (design principle 8).
+      bindPadDrag() {
+        const THRESHOLD = 8; // px of travel before a press becomes a drag
+        let tool = null, digit = null, startPt = null, ghost = null, dragging = false, overCell = null;
+
+        const cellUnder = (x, y) => {
+          const el = document.elementFromPoint(x, y);
+          const cell = el && el.closest ? el.closest('.cell') : null;
+          // Only droppable cells highlight/accept — givens are fixed, and a
+          // point outside the grid (e.g. back over the pad) is not a target.
+          if (!cell || !this.grid.contains(cell)) return null;
+          if (this.givenMask[cell.dataset.r][cell.dataset.c]) return null;
+          return cell;
+        };
+
+        const clearOver = () => {
+          if (overCell) { overCell.classList.remove('drag-over'); overCell = null; }
+        };
+
+        const moveGhost = (x, y) => {
+          if (ghost) { ghost.style.left = x + 'px'; ghost.style.top = y + 'px'; }
+        };
+
+        const startDrag = () => {
+          dragging = true;
+          ghost = tool.cloneNode(true);
+          ghost.classList.remove('active');
+          ghost.classList.add('drag-digit');
+          ghost.removeAttribute('data-tool');
+          document.body.appendChild(ghost);
+        };
+
+        const cleanup = () => {
+          clearOver();
+          if (ghost) { ghost.remove(); ghost = null; }
+          tool = null; digit = null; dragging = false; startPt = null;
+        };
+
+        this.pad.addEventListener('pointerdown', (e) => {
+          const t = e.target.closest('.tool');
+          if (!t || this.won) return;
+          this.suppressPadClick = false; // drop any stale flag from a prior drag
+          tool = t;
+          digit = parseInt(t.dataset.tool, 10);
+          startPt = { x: e.clientX, y: e.clientY };
+          dragging = false;
+          try { t.setPointerCapture(e.pointerId); } catch (_) {}
+        });
+
+        this.pad.addEventListener('pointermove', (e) => {
+          if (!tool) return;
+          if (!dragging) {
+            if (Math.hypot(e.clientX - startPt.x, e.clientY - startPt.y) < THRESHOLD) return;
+            startDrag();
+          }
+          moveGhost(e.clientX, e.clientY);
+          const cell = cellUnder(e.clientX, e.clientY);
+          if (cell !== overCell) {
+            clearOver();
+            if (cell) { cell.classList.add('drag-over'); overCell = cell; }
+          }
+        });
+
+        this.pad.addEventListener('pointerup', (e) => {
+          if (!tool) return;
+          const wasDragging = dragging;
+          const cell = wasDragging ? cellUnder(e.clientX, e.clientY) : null;
+          const d = digit;
+          cleanup();
+          if (!wasDragging) return; // a tap — let the click handler select it
+          this.suppressPadClick = true; // swallow the drag's trailing click
+          if (cell) {
+            this.tryPlace(parseInt(cell.dataset.r, 10), parseInt(cell.dataset.c, 10), d);
+          } else {
+            this.audioSwoosh(); // dropped off any cell — gentle, no placement
+          }
+        });
+
+        this.pad.addEventListener('pointercancel', cleanup);
+      },
+
+      activateCell(r, c) {
+        if (this.givenMask[r][c]) return;
+        if (!this.activeTool) {
+          this.selectCell(r, c);
+          this.updateStatus(`Selected row ${r + 1}, column ${c + 1}. Choose a number.`);
+          return;
+        }
+        this.tryPlace(r, c, parseInt(this.activeTool, 10));
+      },
+
+      showPressProgress(cell) {
+        let prog = cell.querySelector('.press-progress');
+        if (!prog) {
+          prog = document.createElement('div');
+          prog.className = 'press-progress';
+          cell.appendChild(prog);
+        }
+        cell.classList.add('pressing');
+        this.pressProgressCell = cell;
+        this.pressProgressStart = performance.now();
+        this.animatePressProgress();
+      },
+
+      animatePressProgress() {
+        if (!this.pressProgressCell) return;
+        const elapsed = performance.now() - this.pressProgressStart;
+        const pct = Math.min(100, (elapsed / 500) * 100);
+        const prog = this.pressProgressCell.querySelector('.press-progress');
+        if (prog) prog.style.background = `conic-gradient(rgba(222,127,102,0.85) ${pct}%, transparent ${pct}%)`;
+        if (pct < 100 && this.pressProgressCell) {
+          this.pressProgressRAF = requestAnimationFrame(() => this.animatePressProgress());
+        }
+      },
+
+      hidePressProgress() {
+        if (this.pressProgressRAF) cancelAnimationFrame(this.pressProgressRAF);
+        this.pressProgressRAF = null;
+        if (this.pressProgressCell) {
+          this.pressProgressCell.classList.remove('pressing');
+          const prog = this.pressProgressCell.querySelector('.press-progress');
+          if (prog) prog.style.background = '';
+        }
+        this.pressProgressCell = null;
+      },
+
+      setTool(tool) {
+        this.activeTool = tool;
+        this.pad.querySelectorAll('.tool').forEach(t => t.classList.toggle('active', t.dataset.tool === tool));
+        this.updateStatus('');
+      },
+
+      selectCell(r, c) {
+        this.selected = { r, c };
+        this.renderGrid();
+      },
+
+      deselect() {
+        this.selected = null;
+        this.renderGrid();
+      },
+
+      tryPlace(r, c, val) {
+        if (this.won) return;
+        if (this.givenMask[r][c]) return;
+        const oldVal = this.playGrid[r][c];
+        this.playGrid[r][c] = val;
+        // No latent selection (design principle 2): the number pad resets
+        // after every placement, so each piece needs a fresh pick.
+        this.setTool(null);
+        // The puzzle has a unique solution, so "wrong" is simply "not the
+        // solution digit" — that covers rule-breaking (illegal) placements
+        // and quietly-wrong ones alike; the mode toggle governs both.
+        if (this.isWrong(r, c)) {
+          this.audioBuzz();
+          this.updateStatus(`Number ${val} is wrong, try again.`);
+          this.renderGrid();
+          const el = this.getCellEl(r, c);
+          if (el) {
+            el.classList.remove('conflict');
+            void el.offsetWidth;
+            el.classList.add('conflict');
+          }
+          if (this.keepWrong) return;
+          this.animateGhost(r, c, val, () => {
+            this.playGrid[r][c] = oldVal;
+            this.renderGrid();
+          });
+          return;
+        }
+        this.audioPop();
+        this.updateStatus(`Placed ${val} at row ${r + 1}, column ${c + 1}.`);
+        this.deselect();
+        this.markJustPlaced(r, c);
+        this.renderGrid();
+        if (this.checkWin()) this.celebrate();
+      },
+
+      clearCell(r, c) {
+        if (this.givenMask[r][c]) return;
+        this.playGrid[r][c] = 0;
+        this.audioSwoosh();
+        this.markCleared(r, c);
+        this.renderGrid();
+      },
+
+      markJustPlaced(r, c) {
+        const el = this.getCellEl(r, c);
+        if (!el) return;
+        el.classList.remove('just-placed');
+        void el.offsetWidth;
+        el.classList.add('just-placed');
+        setTimeout(() => el.classList.remove('just-placed'), 260);
+      },
+
+      markCleared(r, c) {
+        const el = this.getCellEl(r, c);
+        if (!el) return;
+        el.classList.remove('cleared');
+        void el.offsetWidth;
+        el.classList.add('cleared');
+        setTimeout(() => el.classList.remove('cleared'), 230);
+      },
+
+      getCellEl(r, c) {
+        return this.grid.querySelector(`.cell[data-r="${r}"][data-c="${c}"]`);
+      },
+
+      animateGhost(r, c, val, onDone) {
+        const cell = this.getCellEl(r, c);
+        const tool = this.pad.querySelector(`.tool[data-tool="${val}"]`);
+        if (!cell || !tool) {
+          if (onDone) onDone();
+          return;
+        }
+        const from = cell.getBoundingClientRect();
+        const to = tool.getBoundingClientRect();
+        const ghost = document.createElement('div');
+        ghost.className = 'ghost-digit';
+        ghost.textContent = val;
+        ghost.style.setProperty('--gx', `${from.left + from.width / 2}px`);
+        ghost.style.setProperty('--gy', `${from.top + from.height / 2}px`);
+        ghost.style.setProperty('--tx', `${to.left + to.width / 2}px`);
+        ghost.style.setProperty('--ty', `${to.top + to.height / 2}px`);
+        document.body.appendChild(ghost);
+        ghost.addEventListener('animationend', () => {
+          ghost.remove();
+          if (onDone) onDone();
+        });
+      },
+
+      isWrong(r, c) {
+        return this.playGrid[r][c] !== 0 && !this.givenMask[r][c] &&
+               this.playGrid[r][c] !== this.solution[r][c];
+      },
+
+      hasConflict(r, c, val) {
+        const n = this.n;
+        // row
+        for (let cc = 0; cc < n; cc++) if (cc !== c && this.playGrid[r][cc] === val) return true;
+        // col
+        for (let rr = 0; rr < n; rr++) if (rr !== r && this.playGrid[rr][c] === val) return true;
+        // block
+        const br = Math.floor(r / this.boxR) * this.boxR, bc = Math.floor(c / this.boxC) * this.boxC;
+        for (let rr = br; rr < br + this.boxR; rr++) {
+          for (let cc = bc; cc < bc + this.boxC; cc++) {
+            if ((rr !== r || cc !== c) && this.playGrid[rr][cc] === val) return true;
+          }
+        }
+        return false;
+      },
+
+      checkWin() {
+        // Full AND conflict-free — in Keep mode illegal numbers stay on the
+        // board, so fullness alone is not a win.
+        for (let r = 0; r < this.n; r++) {
+          for (let c = 0; c < this.n; c++) {
+            const v = this.playGrid[r][c];
+            if (v === 0 || this.hasConflict(r, c, v)) return false;
+          }
+        }
+        return true;
+      },
+
+      celebrate() {
+        this.won = true;
+        const tier = CELEBRATION_TIERS[Object.keys(SIZES).indexOf(this.size)];
+        this.audioWin(tier.notes);
+        this.updateStatus('Puzzle solved!');
+        this.renderWinEmojis();
+        this.overlay.classList.add('show');
+        Modal.open(this.overlay, () => this.newGame());
+        for (let i = 0; i < tier.confetti; i++) {
+          const conf = document.createElement('div');
+          conf.className = 'confetti';
+          conf.style.left = Math.random() * 100 + 'vw';
+          conf.style.background = ['#F7A6B9','#8ED3F4','#FFE66D','#A8E6CF','#C3B4F7','#F9C784'][Math.floor(Math.random()*6)];
+          conf.style.width = (6 + Math.random()*8) + 'px';
+          conf.style.height = (6 + Math.random()*8) + 'px';
+          conf.style.animationDuration = (1.5 + Math.random()*2) + 's';
+          conf.style.animationDelay = (Math.random()*0.8) + 's';
+          document.body.appendChild(conf);
+          setTimeout(() => conf.remove(), 4500);
+        }
+      },
+
+      newGame() {
+        this.overlay.classList.remove('show');
+        Modal.close();
+        this.selected = null;
+        this.activeTool = null;
+        this.won = false;
+        const s = SIZES[this.size];
+        this.n = s.n;
+        this.boxR = s.boxR;
+        this.boxC = s.boxC;
+        this.buildPad();
+        this.generatePuzzle();
+        this.buildGrid();
+        this.layout();
+        this.updateStatus('');
+      },
+
+      // Picks where the number pad goes and how big the cells and pad
+      // buttons are. Four arrangements are solved for the largest square
+      // cell that fits the viewport: the pad under the board in one or two
+      // rows (header on top), or beside it in one or two columns (header as
+      // a left column). The biggest cell wins; on a tie the earlier
+      // arrangement wins, so a screen with room to spare keeps the standard
+      // header-on-top layout. A portrait phone stacks, a landscape phone
+      // goes side by side, and nothing needs a scroll.
+      layout() {
+        const L = LAYOUT, n = this.n;
+        // Shrink to the floor before reading the viewport. A board left at
+        // the previous size's cell (a 4×4 cell on a fresh 8×8 board) can be
+        // wider than the screen, and a mobile browser then zooms out and
+        // reports a taller innerHeight than the screen really has.
+        const root = document.documentElement.style;
+        root.setProperty('--cell-size', L.minCellPx + 'px');
+        const vw = document.documentElement.clientWidth;
+        const vh = window.innerHeight;
+        if (!vw || !vh) return;
+
+        // Header size and main's padding/gap differ per arrangement, so
+        // measure each with its class applied.
+        const measure = (side) => {
+          document.body.classList.toggle('side', side);
+          const cs = getComputedStyle(this.main);
+          return {
+            headerW: this.header.offsetWidth,
+            headerH: this.header.offsetHeight,
+            padX: parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight),
+            padY: parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom),
+            gap: parseFloat(side ? cs.columnGap : cs.rowGap) || 0
+          };
+        };
+        const m = { stack: measure(false), side: measure(true) };
+
+        // Board outer size for cell side c: n cells, the seam tracks, the
+        // gaps between all tracks, and .grid-wrap's border + padding.
+        const gcs = getComputedStyle(this.grid);
+        const chrome = 2 * (parseFloat(gcs.borderLeftWidth) + parseFloat(gcs.paddingLeft));
+        const seamsV = n / this.boxC - 1, seamsH = n / this.boxR - 1;
+        const fixedW = seamsV * L.seamPx + (n - 1 + seamsV) * L.gapPx + chrome;
+        const fixedH = seamsH * L.seamPx + (n - 1 + seamsH) * L.gapPx + chrome;
+        const cap = Math.min(L.maxCellPx, (L.maxBoardPx - fixedW) / n, (L.maxBoardPx - fixedH) / n);
+        const span = (k, t) => k * t + (k - 1) * L.toolGapPx; // k pad buttons of side t in a line
+
+        // Largest cell for arrangement a with pad buttons of side t, or -1
+        // when the pad alone doesn't fit.
+        const cellFor = (a, t) => {
+          const k = a.side ? m.side : m.stack;
+          const padW = span(a.cols, t), padH = span(a.rows, t) + L.toolShadowPx;
+          let w = vw - k.padX, h = vh - k.padY;
+          if (a.side) {
+            if (padH > h) return -1;
+            w -= k.headerW + k.gap + padW;
+          } else {
+            if (padW > w) return -1;
+            h -= k.headerH + k.gap + padH;
+          }
+          return Math.floor(Math.min(cap, (w - fixedW) / n, (h - fixedH) / n));
+        };
+
+        const arrangements = [
+          ...[1, 2].map(rows => ({ side: false, rows, cols: Math.ceil(n / rows) })),
+          ...[1, 2].map(cols => ({ side: true, cols, rows: Math.ceil(n / cols) }))
+        ];
+        let best = null;
+        for (const a of arrangements) {
+          // Pad buttons match the cells on a big screen: the largest side
+          // up to maxToolPx that still leaves the cells at least as big.
+          let t = L.maxToolPx;
+          while (t > L.toolPx && cellFor(a, t) < t) t--;
+          a.tool = t;
+          a.cell = cellFor(a, t);
+          if (a.cell >= 0 && (!best || a.cell > best.cell)) best = a;
+        }
+        // Nothing fits even at the floor: stack at the floor and let the
+        // page scroll vertically (body has min-height, not a fixed height).
+        if (!best || best.cell < L.minCellPx) {
+          best = { side: false, cols: Math.ceil(n / 2), tool: L.toolPx, cell: L.minCellPx };
+        }
+
+        document.body.classList.toggle('side', best.side);
+        this.pad.style.setProperty('--pad-cols', best.cols);
+        root.setProperty('--tool', best.tool + 'px');
+        root.setProperty('--cell-size', best.cell + 'px');
+        root.setProperty('--board-w', (n * best.cell + fixedW) + 'px');
+      },
+
+      buildPad() {
+        this.pad.innerHTML = '';
+        for (let i = 1; i <= this.n; i++) {
+          const b = document.createElement('button');
+          b.className = `tool t${i}`;
+          b.dataset.tool = i;
+          b.setAttribute('aria-label', `Number ${i}`);
+          b.textContent = i;
+          this.pad.appendChild(b);
+        }
+      },
+
+      generatePuzzle() {
+        // generate a full valid solution
+        const n = this.n;
+        const solution = Array.from({ length: n }, () => Array(n).fill(0));
+        this.solve(solution);
+        this.solution = solution.map(row => row.slice());
+
+        // remove cells while keeping unique solution, down to the size's
+        // givens target (~50% of the board at every size)
+        const puzzle = solution.map(row => row.slice());
+        const givenMask = Array.from({ length: n }, () => Array(n).fill(true));
+        const positions = [];
+        for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) positions.push([r, c]);
+        this.shuffle(positions);
+
+        let givens = n * n;
+        for (const [r, c] of positions) {
+          if (givens <= SIZES[this.size].givens) break;
+          const backup = puzzle[r][c];
+          puzzle[r][c] = 0;
+          givenMask[r][c] = false;
+          const copy = puzzle.map(row => row.slice());
+          let count = 0;
+          this.countSolutions(copy, () => { count++; }, () => count > 1);
+          if (count !== 1) {
+            puzzle[r][c] = backup;
+            givenMask[r][c] = true;
+          } else {
+            givens--;
+          }
+        }
+
+        this.playGrid = puzzle.map(row => row.slice());
+        this.givenMask = givenMask;
+      },
+
+      solve(grid) {
+        const n = this.n;
+        for (let r = 0; r < n; r++) {
+          for (let c = 0; c < n; c++) {
+            if (grid[r][c] === 0) {
+              const nums = Array.from({ length: n }, (_, i) => i + 1);
+              this.shuffle(nums);
+              for (const v of nums) {
+                if (this.isValid(grid, r, c, v)) {
+                  grid[r][c] = v;
+                  if (this.solve(grid)) return true;
+                  grid[r][c] = 0;
+                }
+              }
+              return false;
+            }
+          }
+        }
+        return true;
+      },
+
+      countSolutions(grid, cb, stop) {
+        const n = this.n;
+        for (let r = 0; r < n; r++) {
+          for (let c = 0; c < n; c++) {
+            if (grid[r][c] === 0) {
+              for (let v = 1; v <= n; v++) {
+                if (this.isValid(grid, r, c, v)) {
+                  grid[r][c] = v;
+                  this.countSolutions(grid, cb, stop);
+                  grid[r][c] = 0;
+                  if (stop && stop()) return;
+                }
+              }
+              return;
+            }
+          }
+        }
+        cb();
+      },
+
+      isValid(grid, r, c, v) {
+        const n = this.n;
+        for (let i = 0; i < n; i++) if (grid[r][i] === v) return false;
+        for (let i = 0; i < n; i++) if (grid[i][c] === v) return false;
+        const br = Math.floor(r / this.boxR) * this.boxR, bc = Math.floor(c / this.boxC) * this.boxC;
+        for (let i = br; i < br + this.boxR; i++) for (let j = bc; j < bc + this.boxC; j++) if (grid[i][j] === v) return false;
+        return true;
+      },
+
+      shuffle(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+      },
+
+      buildGrid() {
+        // (Re)create the cell elements — only when the board itself changes
+        // (new game / size switch). Static per-board attributes (given, grid
+        // position, tabIndex) are set here once; renderGrid() then mutates only
+        // dynamic state, never the DOM node, so a focused cell is not destroyed
+        // during play and keyboard parity survives placement (design principle 8).
+        this.grid.innerHTML = '';
+        // Track templates: a --cell-size track per cell, plus a --seam track
+        // before the first cell of every box after the first. Cell (r, c)
+        // then sits at track c + (boxes to its left), so every cell keeps the
+        // same square size whatever the box shape (2×2, 2×3 or 2×4).
+        const tracks = (box) => Array.from({ length: this.n }, (_, i) =>
+          (i > 0 && i % box === 0 ? 'var(--seam) ' : '') + 'var(--cell-size)').join(' ');
+        this.grid.style.gridTemplateColumns = tracks(this.boxC);
+        this.grid.style.gridTemplateRows = tracks(this.boxR);
+        const seam = (dir, track) => {
+          const el = document.createElement('div');
+          el.className = `seam ${dir}`;
+          el.setAttribute('aria-hidden', 'true');
+          if (dir === 'v') { el.style.gridColumn = track; el.style.gridRow = '1 / -1'; }
+          else { el.style.gridRow = track; el.style.gridColumn = '1 / -1'; }
+          this.grid.appendChild(el);
+        };
+        for (let k = 1; k < this.n / this.boxC; k++) seam('v', k * (this.boxC + 1));
+        for (let k = 1; k < this.n / this.boxR; k++) seam('h', k * (this.boxR + 1));
+        for (let r = 0; r < this.n; r++) {
+          for (let c = 0; c < this.n; c++) {
+            const cell = document.createElement('div');
+            cell.className = 'cell';
+            cell.dataset.r = r;
+            cell.dataset.c = c;
+            cell.setAttribute('role', 'gridcell');
+            cell.style.gridColumn = c + Math.floor(c / this.boxC) + 1;
+            cell.style.gridRow = r + Math.floor(r / this.boxR) + 1;
+            // Givens are fixed for the life of the board, so tabbability never
+            // changes during play — set it once here.
+            if (this.givenMask[r][c]) {
+              cell.classList.add('given');
+            } else {
+              cell.tabIndex = 0;
+            }
+            // The digit lives in its own span so renderGrid() can rewrite it
+            // without clobbering the sibling .press-progress overlay.
+            const num = document.createElement('span');
+            num.className = 'num';
+            cell.appendChild(num);
+            this.grid.appendChild(cell);
+          }
+        }
+        this.renderGrid();
+      },
+
+      renderGrid() {
+        // In-place update of the existing cells built by buildGrid(): only the
+        // digit text and the selected/conflict classes change here.
+        for (let r = 0; r < this.n; r++) {
+          for (let c = 0; c < this.n; c++) {
+            const cell = this.getCellEl(r, c);
+            if (!cell) continue;
+            const num = cell.querySelector('.num');
+            const v = this.playGrid[r][c];
+            if (num) num.textContent = v !== 0 ? v : '';
+            const sel = !!(this.selected && this.selected.r === r && this.selected.c === c);
+            cell.classList.toggle('selected', sel);
+            cell.classList.toggle('conflict', this.isWrong(r, c));
+          }
+        }
+      },
+
+      updateStatus(msg) {
+        this.status.textContent = msg;
+      },
+
+      openSettings() {
+        this.settingsOverlay.classList.add('show');
+        this.updateModeToggle();
+        this.updateSizeButtons();
+        Modal.open(this.settingsOverlay, () => this.closeSettings());
+      },
+
+      openTutorial() {
+        this.tutorialOverlay.classList.add('show');
+        Modal.open(this.tutorialOverlay, () => this.closeTutorial());
+      },
+
+      closeTutorial() {
+        this.tutorialOverlay.classList.remove('show');
+        Modal.close();
+      },
+
+      closeSettings() {
+        this.settingsOverlay.classList.remove('show');
+        Modal.close();
+      },
+
+      setSize(size) {
+        if (size === this.size) {
+          this.closeSettings();
+          return;
+        }
+        this.size = size;
+        this.updateSizeButtons();
+        this.closeSettings();
+        this.newGame();
+      },
+
+      updateSizeButtons() {
+        this.settingsOverlay.querySelectorAll('.size-btn').forEach(btn => {
+          const active = btn.dataset.size === this.size;
+          btn.classList.toggle('active', active);
+          btn.setAttribute('aria-checked', active ? 'true' : 'false');
+        });
+      },
+
+      toggleMode() {
+        this.keepWrong = !this.keepWrong;
+        this.updateModeToggle();
+        if (!this.keepWrong) {
+          this.removeWrongCells();
+        }
+      },
+
+      updateModeToggle() {
+        this.modeToggle.classList.toggle('active', this.keepWrong);
+        this.modeHint.textContent = this.keepWrong
+          ? 'Wrong or clashing numbers stay red until fixed'
+          : 'Wrong or clashing numbers fly back to the pad';
+      },
+
+      removeWrongCells() {
+        const toClear = [];
+        for (let r = 0; r < this.n; r++) {
+          for (let c = 0; c < this.n; c++) {
+            if (this.isWrong(r, c)) {
+              toClear.push([r, c]);
+            }
+          }
+        }
+        if (toClear.length === 0) return;
+        // Design principle 9: switching modes shouldn't clear cells silently
+        // — swoosh + the same suction animation a manual clear uses.
+        this.audioSwoosh();
+        toClear.forEach(([r, c]) => {
+          this.playGrid[r][c] = 0;
+          this.markCleared(r, c);
+        });
+        this.renderGrid();
+      },
+
+      setupPWA() {
+        // The whole toybox is one PWA: a single shared manifest
+        // (../manifest.webmanifest, linked in <head>) and one root-scoped
+        // service worker. Browsers reject blob:/data: worker scripts and
+        // file:// has no SW support, so register only over http(s).
+        if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+          navigator.serviceWorker.register('../sw.js').then((root) => {
+            // Drop any old per-game worker from before unification so the one
+            // root worker controls this page (longest scope wins).
+            navigator.serviceWorker.getRegistrations().then((regs) =>
+              regs.forEach((r) => {
+                if (r !== root && r.scope.startsWith(root.scope) && r.scope !== root.scope) r.unregister();
+              })
+            );
+          }).catch(() => {});
+        }
+      },
+
+      renderWinEmojis() {
+        const row = document.getElementById('emoji-row');
+        const set = this.emojiSets[Math.floor(Math.random() * this.emojiSets.length)];
+        row.innerHTML = set.map(e => `<button>${e}</button>`).join('');
+        // Poking a celebration emoji wiggles it and chirps — a tiny toy.
+        row.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+          btn.classList.remove('wiggle');
+          void btn.offsetWidth;
+          btn.classList.add('wiggle');
+          this.audioEmoji();
+        }));
+      },
+
+      ensureAudio() {
+        if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (this.audioCtx.state === 'suspended') this.audioCtx.resume();
+      },
+
+      playTone({ type = 'sine', freq = 440, duration = 100, startGain = 0.0001, peakGain = 0.15 }) {
+        this.ensureAudio();
+        const ctx = this.audioCtx;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        gain.gain.setValueAtTime(startGain, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(peakGain, ctx.currentTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration / 1000);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + duration / 1000 + 0.02);
+      },
+
+      audioPop() { this.playTone({ type: 'sine', freq: 800, duration: 80, peakGain: 0.18 }); },
+      audioEmoji() {
+        const freq = [523, 587, 659, 784, 880][Math.floor(Math.random() * 5)]; // pentatonic chirp
+        this.playTone({ type: 'sine', freq, duration: 140, peakGain: 0.15 });
+      },
+      audioBuzz() { this.playTone({ type: 'sawtooth', freq: 150, duration: 200, peakGain: 0.12 }); },
+      audioSwoosh() {
+        this.ensureAudio();
+        const ctx = this.audioCtx;
+        const bufferSize = ctx.sampleRate * 0.1;
+        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.12, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.1);
+        src.connect(gain).connect(ctx.destination);
+        src.start();
+      },
+      audioWin(notes) {
+        notes.forEach((freq, i) => {
+          setTimeout(() => this.playTone({ type: 'sine', freq, duration: 220, peakGain: 0.18 }), i * 180);
+        });
+      }
+    };
+
+    App.init();
+  </script>
+</body>
+</html>

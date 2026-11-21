@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<!-- LibreToybox — Game hub · Licensed under the GNU GPL v3.0; see LICENSE -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LibreToybox</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪁</text></svg>" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#9480DC" />
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    /* Own background on html stops the body gradient propagating to the
+       canvas, where it would tile — rubber-band overscroll then shows the
+       wrong end of the gradient instead of blending with the page. */
+    html { background: #FFF8E7; }
+    body {
+      font-family: ui-rounded, 'Hiragino Maru Gothic ProN', Quicksand, Comfortaa, 'Arial Rounded MT Bold', 'Varela Round', Calibri, sans-serif;
+      background: linear-gradient(180deg, #FFF8E7, #E0D9FF);
+      color: #3A3060;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 16px;
+    }
+    h1 { font-size: 2.4rem; margin: 0 0 4px; }
+    p.tagline { margin: 0 0 32px; opacity: 0.75; text-align: center; max-width: 480px; }
+    .games {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      width: 100%;
+      max-width: 440px;
+    }
+    a.card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 16px 10px;
+      background: #fff;
+      border: 3px solid #C0B4F0;
+      border-radius: 20px;
+      box-shadow: 0 8px 22px rgba(0,0,0,0.12);
+      text-decoration: none;
+      color: #3A3060;
+      font-size: 1.05rem;
+      font-weight: bold;
+      transition: transform .1s, border-color .1s;
+    }
+    a.card:hover { border-color: #9480DC; transform: translateY(-2px); }
+    a.card:focus-visible { outline: 4px solid #9480DC; outline-offset: 2px; }
+    a.card:active { transform: translateY(3px); }
+    .emoji { font-size: 2.4rem; }
+    footer { margin-top: 40px; font-size: 0.85rem; opacity: 0.75; }
+    footer a { color: inherit; }
+
+    /* Calm Corner entry point — a small, always-visible fixed icon outside the
+       game grid (not a card in .games), so the toolset reads as a different
+       kind of thing from a game rather than an extra grid slot. Its own
+       unclaimed orange hue (every other hue in the palette is a game's
+       identity already) is the only signal needed — no text badge. */
+    .tool-link {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: #fff;
+      border: 3px solid #F4C79A;
+      box-shadow: 0 6px 16px rgba(0,0,0,0.15);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.7rem;
+      text-decoration: none;
+      z-index: 10;
+      transition: transform .1s, border-color .1s;
+    }
+    .tool-link:hover { border-color: #E8871F; transform: translateY(-2px); }
+    .tool-link:focus-visible { outline: 4px solid #E8871F; outline-offset: 2px; }
+    .tool-link:active { transform: translateY(2px); }
+  </style>
+</head>
+<body>
+  <a class="tool-link" href="calm-corner/" aria-label="Calm Corner — helpful tools">🚪</a>
+  <h1>🪁 LibreToybox</h1>
+  <p class="tagline">Simple HTML5 games for kids aged 6–8. No tracking, registration or addictive feedback loops - just joy.</p>
+  <div class="games">
+    <a class="card" href="sudoku-for-minis/">
+      <span class="emoji">🔢</span>
+      Mini-Sudoku
+    </a>
+    <a class="card" href="exquisite-corpse/">
+      <span class="emoji">🎨</span>
+      Fold &amp; Draw
+    </a>
+    <a class="card" href="memory/">
+      <span class="emoji">❓</span>
+      Memory
+    </a>
+    <a class="card" href="shape-fit/">
+      <span class="emoji">🧩</span>
+      Fit It!
+    </a>
+    <a class="card" href="emoji-paint/">
+      <span class="emoji">🌟</span>
+      Emoji Art
+    </a>
+    <a class="card" href="odd-one-out/">
+      <span class="emoji">🔍</span>
+      Spot It!
+    </a>
+    <a class="card" href="grocery-cashier/">
+      <span class="emoji">🧮</span>
+      Math fun
+    </a>
+    <a class="card" href="guess-next-sequence/">
+      <span class="emoji">🔮</span>
+      What's Next?
+    </a>
+    <a class="card" href="through-the-woods/">
+      <span class="emoji">🌲</span>
+      Path Home
+    </a>
+  </div>
+  <footer><a href="https://github.com/KhaaL/LibreToybox">Source on GitHub</a> · GNU GPL v3.0</footer>
+
+  <script>
+    // The whole toybox is one PWA: a single shared manifest (linked above) and
+    // one root-scoped service worker registered here. Service workers must come
+    // from a real http(s) URL — browsers reject blob:/data: worker scripts, and
+    // file:// has no SW support anyway.
+    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+      navigator.serviceWorker.register('sw.js').then((root) => {
+        // Drop any old, narrower-scoped worker from before unification so the
+        // one root worker controls the whole site (longest scope wins).
+        navigator.serviceWorker.getRegistrations().then((regs) =>
+          regs.forEach((r) => {
+            if (r !== root && r.scope.startsWith(root.scope) && r.scope !== root.scope) r.unregister();
+          })
+        );
+      }).catch(() => {});
+    }
+  </script>
+</body>
+</html>

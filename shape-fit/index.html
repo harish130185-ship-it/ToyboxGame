@@ -1,0 +1,1570 @@
+<!DOCTYPE html>
+<!-- LibreToybox — Fit It! · Licensed under the GNU GPL v3.0; see ../LICENSE -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fit It!</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪁</text></svg>" />
+  <link rel="manifest" href="../manifest.webmanifest" />
+  <meta name="theme-color" content="#2FA98C" />
+  <style>
+    :root {
+      --bg1: #EFFBF4;
+      --bg2: #D6F0E2;
+      --accent: #2FA98C;
+      --border: #A9CDBD;
+      --text: #3E4A44;
+      --cell: 56px;        /* set from JS: board width / N */
+      --tray-scale: 0.5;   /* set from JS: CONFIG.trayScale */
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    /* The page is a fixed-height, non-scrolling column: board and tray must
+       ALWAYS be on screen together, because a drag can't scroll the page
+       (the piece holds pointer capture and touch-action: none). 100dvh, not
+       100vh, so a collapsing mobile address bar doesn't push the tray off. */
+    html, body { margin: 0; padding: 0; height: 100vh; height: 100dvh; }
+    /* Own background on html stops the body gradient propagating to the
+       canvas, where it would tile — rubber-band overscroll then shows the
+       wrong end of the gradient instead of blending with the page. */
+    html { background: var(--bg1); }
+    body {
+      font-family: ui-rounded, 'Hiragino Maru Gothic ProN', Quicksand, Comfortaa, 'Arial Rounded MT Bold', 'Varela Round', Calibri, sans-serif;
+      background: linear-gradient(180deg, var(--bg1), var(--bg2));
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      touch-action: manipulation;
+    }
+    /* Escape hatch: if even a minCellPx board plus its tray can't fit the
+       viewport, scrolling comes back rather than clipping the tray away.
+       setCellSize() sets this class only when the fit genuinely fails. */
+    body.cramped { height: auto; min-height: 100vh; min-height: 100dvh; overflow-y: auto; }
+    body.cramped main { flex: 0 0 auto; }
+
+    header {
+      flex: 0 0 auto;
+      width: 100%;
+      max-width: max(420px, var(--board-w, 0px));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px 6px;
+    }
+    .header-left { display: flex; align-items: center; gap: 8px; }
+    .logo { display: flex; align-items: center; }
+    .top-btns { display: flex; gap: 8px; }
+    .top-btn {
+      position: relative;
+      background: #fff;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 6px 10px;
+      font-family: inherit;
+      font-size: 1.3rem;
+      cursor: pointer;
+      box-shadow: 0 3px 0 #cfe3d8;
+      transition: transform .05s;
+      min-width: 48px;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      color: inherit;
+    }
+    .top-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #cfe3d8; }
+    /* New Game requires a deliberate hold, not a quick tap, so an accidental
+       tap can't silently wipe the board. */
+    .hold-progress { position: absolute; inset: 5px; border-radius: 50%; pointer-events: none; opacity: 0; transition: opacity .1s; }
+    .top-btn.holding .hold-progress { opacity: 1; }
+
+    /* main owns the leftover height; setCellSize() divides it between the
+       board and the tray. min-height: 0 lets it actually shrink below its
+       content height, which is what makes the board scale down on a short
+       (landscape phone) viewport instead of pushing the tray off screen. */
+    main { width: 100%; max-width: max(420px, calc(var(--board-w, 0px) + 32px)); padding: 8px 16px 18px; display: flex; flex-direction: column; align-items: center; gap: 14px; flex: 1 1 auto; min-height: 0; }
+    /* Centres the board in whatever vertical space is left over once the
+       tray has taken its share. */
+    #board-area { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; align-items: center; justify-content: center; }
+
+    /* ===== shared:board-layout-css v1 =====
+       Side arrangement (body.side), picked by BoardLayout.fit() when it
+       gives the bigger board: landscape phones and tablets. The header
+       becomes a left column with 🏠 still top-left, and the tray sits right
+       of the board at the width fit() sets. Scoped to header so the win
+       overlay's .top-btns stay a row. */
+    body.side { flex-direction: row; align-items: stretch; }
+    body.side header { flex-direction: column; width: auto; max-width: none; padding: 12px 0 12px 12px; }
+    body.side header .header-left,
+    body.side header .top-btns { flex-direction: column; }
+    body.side main { flex-direction: row; justify-content: center; max-width: none; padding: 12px; }
+    body.side #board-area { flex: 0 0 auto; width: auto; }
+    body.side .grid-wrap { max-width: none; }
+    body.side #tray { align-content: center; min-width: 0; }
+    /* A header column of up to five buttons plus the logo runs ~330 px tall,
+       so the logo steps aside on the shortest landscape phones. */
+    @media (max-height: 340px) { body.side header .logo { display: none; } }
+    /* ===== end shared:board-layout-css v1 ===== */
+
+    .grid-wrap {
+      /* Pre-JS fallback only — setCellSize() sets an explicit px width that
+         accounts for viewport HEIGHT as well as width. */
+      width: min(92vw, 360px);
+      max-width: 100%;
+      background: #fff;
+      border: 4px solid #7AA692;
+      border-radius: 14px;
+      padding: 8px;
+      box-shadow: 0 8px 22px rgba(0,0,0,0.12);
+    }
+
+    /* The board is both a CSS grid (empty cells) and the positioning
+       context for the absolutely-placed pieces on top of it. */
+    #board {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      display: grid;
+      touch-action: none;
+    }
+    .cell {
+      border: 2px dashed #DCEAE2;
+      border-radius: 8px;
+      margin: 2px;
+      pointer-events: none;
+    }
+    .cell.ghost {
+      border: 2px solid #74C69D;
+      background: #D8F3E3;
+    }
+
+    /* Pieces: one div per polyomino, made of .blk squares. Everything is
+       sized off --cell so a resize only has to update that one variable. */
+    .piece {
+      position: absolute;
+      transform-origin: 0 0;
+      touch-action: none;
+      cursor: grab;
+      z-index: 5;
+    }
+    .piece:focus-visible { outline: 3px solid var(--text); outline-offset: 3px; border-radius: 10px; }
+    .piece.in-tray { left: var(--tray-x, 0px); top: var(--tray-y, 0px); transform: scale(var(--tray-scale)); }
+    .piece.pressed { filter: drop-shadow(0 4px 6px rgba(0,0,0,0.22)); }
+    .piece.dragging {
+      position: fixed;
+      z-index: 60;
+      cursor: grabbing;
+      filter: drop-shadow(0 12px 14px rgba(0,0,0,0.25));
+    }
+    /* Pickup ease: on for the first liftMs of a drag, so the piece grows
+       from tray scale and rises to the lifted pose instead of teleporting. */
+    .piece.lifting { transition: left .13s ease-out, top .13s ease-out, transform .13s ease-out; }
+    .piece.flying {
+      position: fixed;
+      z-index: 60;
+      transition: left .25s ease, top .25s ease, transform .25s ease;
+      pointer-events: none;
+    }
+    /* Block borders, radii and bevels are set per-side from JS so the
+       outline runs around the piece's outer perimeter only — the piece
+       reads as one connected shape with a visible edge. */
+    .blk {
+      position: absolute;
+      border-style: solid;
+      border-width: 0;
+    }
+    .piece.pop .blk { animation: settle .22s ease-out; }
+    .piece.shake { animation: shake .3s ease; }
+
+    #tray {
+      /* Never flex — the tray takes its natural height and the board gets
+         what's left, so a wrapped tray row can't push the board off screen. */
+      flex: 0 0 auto;
+      width: 100%;
+      max-width: max(400px, var(--board-w, 0px));
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 12px;
+      padding: 4px 0 8px;
+      border-radius: 14px;
+    }
+    #tray.drop-home { outline: 3px dashed var(--accent); outline-offset: 4px; }
+    /* Slots keep their size forever — an empty slot is an invisible spacer,
+       so the tray never reflows while the child is dragging. A slot is also
+       the piece's touch target, at least CONFIG.minHitPx square. */
+    .slot { position: relative; touch-action: none; cursor: grab; }
+    .slot.deal { animation: pop .3s ease-out both; animation-delay: var(--d, 0s); }
+    .slot.out, .piece.out { animation: suction .22s ease-in forwards; }
+
+    /* Visually hidden but available to screen readers (aria-live announcements
+       still fire). Standard clip-based sr-only pattern. */
+    .status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+    @keyframes pop { 0% { transform: scale(0.6); opacity: 0.4; } 60% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+    @keyframes settle { 0% { transform: scale(0.85); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
+    @keyframes shake { 0%, 100% { margin-left: 0; } 25% { margin-left: -7px; } 75% { margin-left: 7px; } }
+    @keyframes suction { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(0.1); opacity: 0; } }
+    @keyframes fall { 0% { transform: translateY(-10vh) rotate(0deg); opacity: 1; } 100% { transform: translateY(110vh) rotate(720deg); opacity: 0; } }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      text-align: center;
+      padding: 20px;
+    }
+    .overlay.show { display: flex; }
+    /* Translucent win overlay so the filled board stays visible beneath
+       the celebration (same pattern as Memory). */
+    #win-overlay { background: rgba(255,255,255,0.55); justify-content: flex-end; padding-bottom: 12vh; }
+    #settings-overlay, #tutorial-overlay { background: rgba(255,255,255,0.92); }
+    .emoji-row { font-size: 4.5rem; display: flex; gap: 18px; margin-bottom: 22px; }
+    .emoji-row button { background: none; border: none; padding: 0; font: inherit; cursor: pointer; animation: pop .6s ease-out both; }
+    .emoji-row button:nth-child(2) { animation-delay: .15s; }
+    .emoji-row button:nth-child(3) { animation-delay: .3s; }
+    .emoji-row button:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; border-radius: 12px; }
+    .emoji-row button.wiggle { animation: wiggle .5s ease; }
+    @keyframes wiggle { 0%, 100% { transform: rotate(0) scale(1); } 25% { transform: rotate(-12deg) scale(1.25); } 55% { transform: rotate(9deg) scale(1.12); } 80% { transform: rotate(-4deg) scale(1.04); } }
+    .confetti { position: fixed; top: 0; left: 0; width: 10px; height: 10px; pointer-events: none; z-index: 101; animation: fall linear forwards; }
+
+    .settings-card {
+      background: #fff;
+      border: 3px solid var(--border);
+      border-radius: 18px;
+      padding: 22px 26px;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.15);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      min-width: 260px;
+    }
+    .settings-card h2 { margin: 0; font-size: 2rem; }
+    .size-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 18px; max-width: 252px; }
+    .size-btn {
+      width: 72px;
+      height: 72px;
+      border: 2px solid var(--border);
+      border-radius: 16px;
+      background: #fff;
+      font-family: inherit;
+      font-size: 1.7rem;
+      cursor: pointer;
+      box-shadow: 0 4px 0 #cfe3d8;
+      transition: transform .05s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      color: var(--text);
+    }
+    .size-btn small { font-size: 0.8rem; }
+    .size-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #cfe3d8; }
+    .size-btn.active { box-shadow: 0 0 0 4px gold, 0 4px 0 #cfe3d8; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <a class="top-btn" id="back-btn" href="../index.html" aria-label="Back to LibreToybox home">🏠</a>
+      <div class="logo" role="img" aria-label="Fit It!" title="Fit It!">
+        <svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true">
+          <rect x="4" y="4" width="13" height="13" rx="4" fill="#F7A6B9"/>
+          <rect x="4" y="18" width="13" height="13" rx="4" fill="#F7A6B9"/>
+          <rect x="4" y="32" width="13" height="13" rx="4" fill="#F7A6B9"/>
+          <rect x="18" y="32" width="13" height="13" rx="4" fill="#F7A6B9"/>
+          <rect x="18" y="4" width="13" height="13" rx="4" fill="#8ED3F4"/>
+          <rect x="32" y="4" width="13" height="13" rx="4" fill="#8ED3F4"/>
+          <rect x="32" y="18" width="13" height="13" rx="4" fill="#FFE66D"/>
+          <rect x="32" y="32" width="13" height="13" rx="4" fill="#FFE66D"/>
+        </svg>
+      </div>
+    </div>
+    <div class="top-btns">
+      <button class="top-btn" id="new-game" aria-label="New Game">🔄<span class="hold-progress" aria-hidden="true"></span></button>
+      <button class="top-btn" id="settings-btn" aria-label="Settings">⚙️</button>
+      <button class="top-btn" id="tutorial-btn" aria-label="How to Play">❓</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="status" id="status" aria-live="polite"></div>
+    <div id="board-area">
+      <div class="grid-wrap">
+        <div id="board" role="group" aria-label="Puzzle board"></div>
+      </div>
+    </div>
+    <div id="tray" role="group" aria-label="Piece tray"></div>
+  </main>
+
+  <div class="overlay" id="win-overlay" role="dialog" aria-modal="true" aria-label="You won">
+    <div class="emoji-row" id="emoji-row"></div>
+    <div class="top-btns">
+      <a class="top-btn" id="win-home-btn" href="../index.html" aria-label="Back to LibreToybox home">🏠</a>
+      <button class="top-btn" id="play-again" aria-label="Play Again">🔄</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="settings-overlay" role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="settings-card">
+      <h2>⚙️</h2>
+      <div class="size-row" role="radiogroup" aria-label="Board size">
+        <button class="size-btn" data-size="tiny" role="radio" aria-label="Easy, 4 by 4">🐣<small>4×4</small></button>
+        <button class="size-btn" data-size="mini" role="radio" aria-label="Normal, 5 by 5">🕊️<small>5×5</small></button>
+        <button class="size-btn" data-size="small" role="radio" aria-label="Hard, 6 by 6, pieces turn">🦅<small>6×6</small></button>
+      </div>
+      <button class="top-btn" id="close-settings" aria-label="Close">✕</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="tutorial-overlay" role="dialog" aria-modal="true" aria-label="How to Play">
+    <div class="settings-card">
+      <h2>🎓</h2>
+      <p>Tutorial coming soon!</p>
+      <button class="top-btn" id="close-tutorial" aria-label="Close">✕</button>
+    </div>
+  </div>
+
+  <script>
+    // All tuning lives here — board sizes, piece sizes, timings, colors.
+    const CONFIG = {
+      sizes: {
+        tiny:  { n: 4, minPiece: 3, maxPiece: 4 },
+        mini:  { n: 5, minPiece: 3, maxPiece: 5 },
+        // Hard deals every piece turned a random way; a tap turns it.
+        small: { n: 6, minPiece: 3, maxPiece: 5, rotate: true }
+      },
+      // Celebration grows with difficulty — Easy is today's unchanged baseline,
+      // Normal/Hard add more confetti and extra rising notes on the same fanfare.
+      celebrationTiers: [
+        { confetti: 60,  notes: [523.25, 659.25, 783.99] },
+        { confetti: 90,  notes: [523.25, 659.25, 783.99, 1046.50] },
+        { confetti: 130, notes: [523.25, 659.25, 783.99, 1046.50, 1318.51] }
+      ],
+      trayScale: 0.5,
+      maxBoardPx: 560,   // board never grows past this, however wide the screen
+      maxCellPx: 96,     // nor its cells past this, so an Easy board stays in proportion
+      minCellPx: 30,     // board shrinks no further; below this the page scrolls instead
+      minHitPx: 60,      // every tray slot is at least this big (principle 4)
+      dragEdgePx: 4,     // a dragged piece always keeps this much of itself on screen
+      liftPx: 56,        // grabbed point rides this far above the finger (touch/pen only)
+      liftMs: 130,       // pickup eases into the lifted pose instead of teleporting
+      snapRange: 0.8,    // max distance (in cells) a drop may be from a fitting spot
+      tapMovePx: 8,      // pointer travel below this counts as a tap
+      flyBackMs: 260,
+      dealStaggerMs: 40,
+      palette: [
+        { fill: '#F7A6B9', edge: '#DE7590', name: 'pink' },
+        { fill: '#F9C784', edge: '#DE9A47', name: 'orange' },
+        { fill: '#FFE66D', edge: '#DCBC2E', name: 'yellow' },
+        { fill: '#A8E6CF', edge: '#6DBF9B', name: 'mint' },
+        { fill: '#8ED3F4', edge: '#54A6D2', name: 'blue' },
+        { fill: '#C3B4F7', edge: '#9480DC', name: 'purple' },
+        { fill: '#FFB3A0', edge: '#DE7F66', name: 'coral' },
+        { fill: '#C8E88A', edge: '#96C24E', name: 'green' }
+      ]
+    };
+
+    // --- Shared modal a11y helper (copied into each game — the suite ships no
+    // bundler). Moves focus into an opened overlay, traps Tab within it, closes
+    // on Escape, and restores focus to the opener on close (design principle 8). ---
+    const Modal = {
+      opener: null, overlay: null, onDismiss: null, handler: null,
+      focusable(el) {
+        return [...el.querySelectorAll('a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+          .filter(n => n.getClientRects().length > 0);
+      },
+      open(overlay, onDismiss) {
+        this.opener = document.activeElement;
+        this.overlay = overlay;
+        this.onDismiss = onDismiss || null;
+        const items = this.focusable(overlay);
+        (items[0] || overlay).focus({ preventScroll: true });
+        this.handler = (e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            if (this.onDismiss) this.onDismiss(); else this.close();
+          } else if (e.key === 'Tab') {
+            const f = this.focusable(overlay);
+            if (!f.length) { e.preventDefault(); return; }
+            const first = f[0], last = f[f.length - 1];
+            if (e.shiftKey && (document.activeElement === first || !overlay.contains(document.activeElement))) {
+              e.preventDefault(); last.focus();
+            } else if (!e.shiftKey && (document.activeElement === last || !overlay.contains(document.activeElement))) {
+              e.preventDefault(); first.focus();
+            }
+          }
+        };
+        document.addEventListener('keydown', this.handler, true);
+      },
+      close() {
+        if (this.handler) document.removeEventListener('keydown', this.handler, true);
+        this.handler = null;
+        const opener = this.opener;
+        this.opener = this.overlay = this.onDismiss = null;
+        if (opener && opener.focus) opener.focus({ preventScroll: true });
+      }
+    };
+
+    /* ===== shared:piece-drag v1 =====
+       One set of piece controls for the toybox's grid-packing games
+       (shape-fit/ and through-the-woods/). Each game is a single
+       self-contained file, so this block is copied into both;
+       scripts/check-design.js fails CI when the copies differ.
+         drag  : the piece lifts above the finger and snaps to the nearest
+                 spot it fits, within cfg.snapRange cells
+         tap   : the piece turns 90° clockwise, pivoting on the tapped cell.
+                 A piece that can't turn wiggles instead.
+         drop on the board where it doesn't fit : flies back where it came from
+         drop anywhere else                     : flies back to its tray slot
+         keys  : Enter picks up and places, arrows move, R turns,
+                 Escape puts the piece back in the tray
+       The host game owns the rules and the look. It provides:
+         board, tray, cellEls, N, gameId, won, cfg (its CONFIG)
+         fits(p, r, c, cells = p.cells)   p's own cells never block it
+         canTurn(p), turnedCells(p), applyTurn(p)
+         onPlaced(p, how)                 how: 'drop' | 'key' | 'turn' | 'return'
+         onTray(p), describe(p), updateStatus(msg)
+         audioPickup(), audioTurn(), audioOops(), audioSwoosh()
+       Each piece p carries cells [{r, c}], rows, cols, placed ({r, c} or
+       null), el (the piece element) and slotEl (built by makeSlot). */
+    const PieceDrag = {
+      host: null,
+      drag: null,  // { p, pointerId, pointerType, startX, startY, grabX, grabY, lift, moved, from, pivot, target, x, y }
+      kb: null,    // { p, r, c, from } keyboard placement cursor
+      liftTimer: null,
+
+      init(host) { this.host = host; },
+      get cfg() { return this.host.cfg; },
+
+      reset() {
+        this.drag = null;
+        this.kb = null;
+        this.clearGhost();
+        this.host.tray.classList.remove('drop-home');
+      },
+
+      relayout() { if (this.kb) this.positionKb(); },
+
+      cellPx() { return this.host.board.getBoundingClientRect().width / this.host.N; },
+
+      /* ---------- tray slots ---------- */
+
+      makeSlot(p) {
+        const slot = document.createElement('div');
+        const el = p.el;
+        slot.className = 'slot';
+        p.slotEl = slot;
+        el.classList.add('in-tray');
+        el.tabIndex = 0;
+        el.setAttribute('role', 'button');
+        slot.appendChild(el);
+        this.layoutSlot(p);
+        el.addEventListener('pointerdown', (e) => this.onDown(e, p));
+        // The slot is a hit area too: a thin piece at tray scale can be
+        // narrower than a finger, the slot never is (cfg.minHitPx).
+        slot.addEventListener('pointerdown', (e) => {
+          if (el.parentNode === slot && !el.contains(e.target)) this.onDown(e, p);
+        });
+        el.addEventListener('pointermove', (e) => this.onMove(e));
+        el.addEventListener('pointerup', (e) => this.onUp(e));
+        el.addEventListener('pointercancel', (e) => this.onCancel(e));
+        el.addEventListener('keydown', (e) => this.onKey(e, p));
+        el.addEventListener('blur', () => { if (this.kb && this.kb.p === p) this.endKb(); });
+        return slot;
+      },
+
+      // A piece that can turn gets a square slot (its longest side both
+      // ways), so turning it in the tray never reflows the row. The piece is
+      // centred in its slot through --tray-x/--tray-y.
+      layoutSlot(p) {
+        const k = this.cfg.trayScale, min = this.cfg.minHitPx;
+        const side = this.host.canTurn(p) ? Math.max(p.rows, p.cols) : 0;
+        const w = `max(${min}px, var(--cell) * ${(side || p.cols) * k})`;
+        const h = `max(${min}px, var(--cell) * ${(side || p.rows) * k})`;
+        p.slotEl.style.width = w;
+        p.slotEl.style.height = h;
+        p.el.style.setProperty('--tray-x', `calc((${w} - var(--cell) * ${p.cols * k}) / 2)`);
+        p.el.style.setProperty('--tray-y', `calc((${h} - var(--cell) * ${p.rows * k}) / 2)`);
+      },
+
+      /* ---------- pointer: press, then tap or drag ---------- */
+
+      onDown(e, p) {
+        if (this.host.won || this.drag || p.el.classList.contains('flying')) return;
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        e.preventDefault();
+        if (this.kb) {
+          const held = this.kb.p === p;
+          this.endKb();
+          if (held) return;
+        }
+        p.el.setPointerCapture(e.pointerId);
+        this.drag = {
+          p, pointerId: e.pointerId, pointerType: e.pointerType,
+          startX: e.clientX, startY: e.clientY, grabX: 0, grabY: 0, lift: 0,
+          moved: false, from: p.placed ? { ...p.placed } : null,
+          pivot: this.pivotAt(p, e.clientX, e.clientY), target: null, x: 0, y: 0
+        };
+        p.el.classList.add('pressed');
+      },
+
+      onMove(e) {
+        const d = this.drag;
+        if (!d || e.pointerId !== d.pointerId) return;
+        if (!d.moved) {
+          if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) <= this.cfg.tapMovePx) return;
+          this.lift(d);
+        }
+        this.position(e.clientX, e.clientY);
+        this.updateGhost();
+        this.host.tray.classList.toggle('drop-home', this.overTray(e.clientX, e.clientY));
+      },
+
+      // The press became a drag: the piece leaves its slot or board spot.
+      lift(d) {
+        const p = d.p, el = p.el, h = this.host;
+        d.moved = true;
+        el.classList.remove('pressed');
+        // A drag can't scroll the page (pointer capture + touch-action: none),
+        // so a piece picked up while the board is off screen could never be
+        // dropped. The layout keeps both on screen; this is insurance for the
+        // cramped fallback.
+        this.ensureBoardVisible();
+        // Carry by the grabbed point: the spot under the finger stays under
+        // the finger (normalized, so tray scale maps to the same spot at full
+        // size), riding liftPx above it so the hand never hides the piece. A
+        // mouse cursor hides nothing, so it gets no lift. Reading the rect
+        // after any scroll keeps the grab point honest; the clamp covers a
+        // piece that scrolled out from under the finger.
+        const rect = el.getBoundingClientRect();
+        d.grabX = Math.min(Math.max((d.startX - rect.left) / rect.width, 0), 1);
+        d.grabY = Math.min(Math.max((d.startY - rect.top) / rect.height, 0), 1);
+        d.lift = d.pointerType === 'mouse' ? 0 : this.cfg.liftPx;
+        p.placed = null;
+        p.slotEl.classList.remove('deal'); // grabbed mid-pop: kill the slot transform now
+        el.classList.remove('in-tray', 'pop');
+        el.classList.add('dragging');
+        // Ease into the lifted pose from the exact current pose (position
+        // and scale) instead of teleporting under the finger.
+        el.style.left = rect.left + 'px';
+        el.style.top = rect.top + 'px';
+        el.style.transform = `scale(${rect.width / el.offsetWidth})`;
+        void el.offsetWidth;
+        el.classList.add('lifting');
+        clearTimeout(this.liftTimer);
+        this.liftTimer = setTimeout(() => el.classList.remove('lifting'), this.cfg.liftMs);
+        el.style.transform = '';
+        h.audioPickup();
+        h.updateStatus(`Picked up the ${h.describe(p)}.`);
+      },
+
+      // The dragged piece is position:fixed at full size, so it is clamped
+      // to the viewport. The clamp applies to the logical pose d.x/d.y, so
+      // updateGhost() previews exactly the spot the drop will land in.
+      position(x, y) {
+        const d = this.drag, el = d.p.el, M = this.cfg.dragEdgePx;
+        const w = el.offsetWidth, h = el.offsetHeight;
+        d.x = Math.min(Math.max(x - d.grabX * w, M), Math.max(M, window.innerWidth - w - M));
+        d.y = Math.min(Math.max(y - d.grabY * h - d.lift, M), Math.max(M, window.innerHeight - h - M));
+        el.style.left = d.x + 'px';
+        el.style.top = d.y + 'px';
+      },
+
+      onUp(e) {
+        const d = this.drag;
+        if (!d || e.pointerId !== d.pointerId) return;
+        const p = d.p, h = this.host;
+        this.drag = null;
+        this.clearGhost();
+        p.el.classList.remove('pressed');
+        h.tray.classList.remove('drop-home');
+        if (!d.moved) { this.tap(p, d.pivot); return; }
+        // .dragging stays on until the drop resolves, so the piece keeps its
+        // fixed position meanwhile.
+        if (d.target) { this.place(p, d.target.r, d.target.c, 'drop'); return; }
+        const onBoard = !this.overTray(e.clientX, e.clientY)
+          && this.rectsOverlap(p.el.getBoundingClientRect(), h.board.getBoundingClientRect());
+        if (onBoard) {
+          h.audioOops(); // it doesn't fit there: gentle, never punitive
+          h.updateStatus(`That spot does not fit. The ${h.describe(p)} went back.`);
+          this.flyBack(p, d.from);
+        } else {
+          h.audioSwoosh();
+          h.updateStatus(`Put the ${h.describe(p)} back in the tray.`);
+          this.flyBack(p, null);
+        }
+      },
+
+      onCancel(e) {
+        const d = this.drag;
+        if (!d || e.pointerId !== d.pointerId) return;
+        this.drag = null;
+        this.clearGhost();
+        d.p.el.classList.remove('pressed');
+        this.host.tray.classList.remove('drop-home');
+        if (d.moved) this.flyBack(d.p, d.from);
+      },
+
+      /* ---------- turning ---------- */
+
+      tap(p, pivot) {
+        const h = this.host;
+        if (!h.canTurn(p)) {
+          this.shake(p);
+          h.audioOops();
+          h.updateStatus(`The ${h.describe(p)} doesn't turn. Drag it to move it.`);
+          return;
+        }
+        if (!p.placed) {
+          h.applyTurn(p);
+          this.layoutSlot(p);
+          this.spin(p);
+          h.audioTurn();
+          h.updateStatus(`Turned the ${h.describe(p)}.`);
+          h.onTray(p);
+          return;
+        }
+        const spot = this.turnSpot(p, pivot);
+        if (!spot) {
+          this.shake(p);
+          h.audioOops();
+          h.updateStatus(`No room to turn the ${h.describe(p)} here.`);
+          return;
+        }
+        h.applyTurn(p);
+        this.layoutSlot(p);
+        h.audioTurn();
+        h.updateStatus(`Turned the ${h.describe(p)}.`);
+        this.place(p, spot.r, spot.c, 'turn');
+        this.spin(p);
+      },
+
+      // Where a placed piece lands after one clockwise turn. Spots that keep
+      // the tapped cell covered come first, then the one nearest the old
+      // spot, so the piece turns in place whenever there is room.
+      turnSpot(p, pivot) {
+        const h = this.host, from = p.placed, next = h.turnedCells(p);
+        const mid = (cells) => cells.reduce((m, q) => ({
+          r: m.r + q.r / cells.length, c: m.c + q.c / cells.length
+        }), { r: 0, c: 0 });
+        const was = mid(p.cells), now = mid(next);
+        const pins = [pivot, ...p.cells.map(q => ({ r: from.r + q.r, c: from.c + q.c }))].filter(Boolean);
+        const spots = [];
+        pins.forEach((pin, rank) => next.forEach(q => {
+          const r = pin.r - q.r, c = pin.c - q.c;
+          const drift = Math.hypot(r + now.r - from.r - was.r, c + now.c - from.c - was.c);
+          spots.push({ r, c, score: (rank ? 100 : 0) + drift });
+        }));
+        spots.sort((a, b) => a.score - b.score);
+        p.placed = null; // the piece's own cells don't block its turn
+        const spot = spots.find(s => h.fits(p, s.r, s.c, next));
+        p.placed = from;
+        return spot ? { r: spot.r, c: spot.c } : null;
+      },
+
+      // One-shot quarter turn around the piece's centre, so the child sees it
+      // turn instead of jumping to the new shape (principle 10).
+      spin(p) {
+        const el = p.el;
+        if (!el.animate || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        const s = el.classList.contains('in-tray') ? this.cfg.trayScale : 1;
+        const cx = el.offsetWidth / 2, cy = el.offsetHeight / 2;
+        const pose = (a) => `scale(${s}) translate(${cx}px, ${cy}px) rotate(${a}deg) translate(${-cx}px, ${-cy}px)`;
+        el.animate([{ transform: pose(-90) }, { transform: pose(0) }], { duration: 200, easing: 'ease-out' });
+      },
+
+      shake(p) {
+        p.el.classList.remove('shake');
+        void p.el.offsetWidth;
+        p.el.classList.add('shake');
+      },
+
+      /* ---------- landing ---------- */
+
+      place(p, r, c, how) {
+        this.settle(p, r, c, how !== 'turn');
+        this.host.onPlaced(p, how);
+      },
+
+      settle(p, r, c, pop) {
+        const el = p.el;
+        p.placed = { r, c };
+        el.classList.remove('dragging', 'flying', 'in-tray', 'pop', 'lifting', 'pressed');
+        el.style.left = `calc(var(--cell) * ${c})`;
+        el.style.top = `calc(var(--cell) * ${r})`;
+        el.style.transform = '';
+        if (el.parentNode !== this.host.board) this.host.board.appendChild(el);
+        if (!pop) return;
+        void el.offsetWidth;
+        el.classList.add('pop');
+      },
+
+      settleInTray(p) {
+        const el = p.el;
+        p.placed = null;
+        el.classList.remove('dragging', 'flying', 'pop', 'lifting', 'pressed');
+        el.classList.add('in-tray');
+        el.style.left = el.style.top = el.style.transform = '';
+        if (el.parentNode !== p.slotEl) p.slotEl.appendChild(el);
+      },
+
+      // Flies p from wherever it is now to a board spot, or to its tray slot
+      // when spot is null. A board spot is claimed at take-off, so nothing
+      // else can be dropped there mid-flight.
+      flyBack(p, spot) {
+        const h = this.host, el = p.el;
+        p.placed = null;
+        if (spot && !h.fits(p, spot.r, spot.c)) spot = null;
+        const cur = el.getBoundingClientRect();
+        el.classList.remove('dragging', 'in-tray', 'pop', 'shake', 'lifting', 'pressed');
+        el.classList.add('flying');
+        el.style.left = cur.left + 'px';
+        el.style.top = cur.top + 'px';
+        el.style.transform = `scale(${cur.width / el.offsetWidth})`;
+        void el.offsetWidth;
+        const to = spot ? this.boardPose(spot.r, spot.c) : this.trayPose(p);
+        el.style.left = to.left + 'px';
+        el.style.top = to.top + 'px';
+        el.style.transform = `scale(${to.scale})`;
+        if (spot) p.placed = { ...spot };
+        const gen = h.gameId;
+        setTimeout(() => {
+          if (gen !== h.gameId) return;
+          if (spot) { this.settle(p, spot.r, spot.c, true); h.onPlaced(p, 'return'); }
+          else { this.settleInTray(p); h.onTray(p); }
+        }, this.cfg.flyBackMs);
+      },
+
+      trayPose(p) {
+        const t = p.slotEl.getBoundingClientRect(), k = this.cfg.trayScale, cell = this.cellPx();
+        return {
+          left: t.left + (t.width - p.cols * cell * k) / 2,
+          top: t.top + (t.height - p.rows * cell * k) / 2,
+          scale: k
+        };
+      },
+
+      boardPose(r, c) {
+        const b = this.host.board.getBoundingClientRect(), cell = b.width / this.host.N;
+        return { left: b.left + c * cell, top: b.top + r * cell, scale: 1 };
+      },
+
+      /* ---------- snap preview ---------- */
+
+      // The nearest *fitting* spot within cfg.snapRange cells of the logical
+      // drag pose, so a near miss beside an occupied region still lands.
+      updateGhost() {
+        this.clearGhost();
+        const d = this.drag;
+        if (!d) return;
+        const b = this.host.board.getBoundingClientRect(), cell = b.width / this.host.N;
+        const exactR = (d.y - b.top) / cell, exactC = (d.x - b.left) / cell;
+        let best = null, bestDist = this.cfg.snapRange;
+        for (let r = Math.round(exactR) - 1; r <= Math.round(exactR) + 1; r++) {
+          for (let c = Math.round(exactC) - 1; c <= Math.round(exactC) + 1; c++) {
+            if (!this.host.fits(d.p, r, c)) continue;
+            const dist = Math.hypot(r - exactR, c - exactC);
+            if (dist < bestDist) { bestDist = dist; best = { r, c }; }
+          }
+        }
+        d.target = best;
+        if (best) this.highlight(d.p, best.r, best.c);
+      },
+
+      highlight(p, r, c) {
+        const N = this.host.N;
+        p.cells.forEach(q => this.host.cellEls[(r + q.r) * N + (c + q.c)].classList.add('ghost'));
+      },
+
+      clearGhost() {
+        (this.host.cellEls || []).forEach(el => el.classList.remove('ghost'));
+      },
+
+      /* ---------- keyboard (parity with touch, principle 8) ---------- */
+
+      onKey(e, p) {
+        const h = this.host, key = e.key;
+        if (h.won || this.drag) return;
+        const held = this.kb && this.kb.p === p;
+        if (key === 'Enter' || key === ' ') {
+          e.preventDefault();
+          if (!held) { this.startKb(p); return; }
+          const { r, c } = this.kb;
+          if (h.fits(p, r, c)) {
+            this.kb = null;
+            this.clearGhost();
+            this.place(p, r, c, 'key');
+            p.el.focus({ preventScroll: true });
+          } else {
+            this.shake(p);
+            h.audioOops();
+          }
+        } else if (key === 'r' || key === 'R') {
+          e.preventDefault();
+          if (!held || !h.canTurn(p)) { this.tap(p, null); return; }
+          h.applyTurn(p);
+          this.layoutSlot(p);
+          this.kb.r = Math.max(0, Math.min(h.N - p.rows, this.kb.r));
+          this.kb.c = Math.max(0, Math.min(h.N - p.cols, this.kb.c));
+          this.positionKb();
+          this.spin(p);
+          h.audioTurn();
+        } else if (held && key.startsWith('Arrow')) {
+          e.preventDefault();
+          if (key === 'ArrowUp') this.kb.r--;
+          if (key === 'ArrowDown') this.kb.r++;
+          if (key === 'ArrowLeft') this.kb.c--;
+          if (key === 'ArrowRight') this.kb.c++;
+          this.kb.r = Math.max(0, Math.min(h.N - p.rows, this.kb.r));
+          this.kb.c = Math.max(0, Math.min(h.N - p.cols, this.kb.c));
+          this.positionKb();
+        } else if (held && key === 'Escape') {
+          e.preventDefault();
+          this.kb = null;
+          this.clearGhost();
+          this.flyBack(p, null);
+          h.audioSwoosh();
+          h.updateStatus(`Put the ${h.describe(p)} back in the tray.`);
+        }
+      },
+
+      // Holds p over the board: a placed piece where it sits, a tray piece at
+      // the first spot it fits.
+      startKb(p) {
+        const h = this.host, from = p.placed ? { ...p.placed } : null;
+        p.placed = null;
+        let spot = from;
+        for (let r = 0; r <= h.N - p.rows && !spot; r++) {
+          for (let c = 0; c <= h.N - p.cols && !spot; c++) {
+            if (h.fits(p, r, c)) spot = { r, c };
+          }
+        }
+        if (!spot) spot = { r: 0, c: 0 };
+        this.kb = { p, r: spot.r, c: spot.c, from };
+        p.slotEl.classList.remove('deal');
+        p.el.classList.remove('in-tray', 'pop');
+        p.el.classList.add('dragging');
+        this.positionKb();
+        h.audioPickup();
+        h.updateStatus('Arrow keys move the piece. R turns it. Enter places it. Escape puts it back.');
+      },
+
+      positionKb() {
+        const { p, r, c } = this.kb, pose = this.boardPose(r, c);
+        p.el.style.left = pose.left + 'px';
+        p.el.style.top = pose.top + 'px';
+        p.el.style.transform = '';
+        this.clearGhost();
+        if (this.host.fits(p, r, c)) this.highlight(p, r, c);
+      },
+
+      // Focus left the held piece (Tab, a click elsewhere): it goes back to
+      // where it came from.
+      endKb() {
+        if (!this.kb) return;
+        const { p, from } = this.kb;
+        this.kb = null;
+        this.clearGhost();
+        this.flyBack(p, from);
+      },
+
+      /* ---------- geometry helpers ---------- */
+
+      // The board cell of p nearest (x, y), for a piece on the board; null
+      // for a piece in the tray.
+      pivotAt(p, x, y) {
+        if (!p.placed) return null;
+        const rect = p.el.getBoundingClientRect(), cell = rect.width / p.cols;
+        const lr = (y - rect.top) / cell - 0.5, lc = (x - rect.left) / cell - 0.5;
+        let best = p.cells[0], bestDist = Infinity;
+        p.cells.forEach(q => {
+          const dist = Math.hypot(q.r - lr, q.c - lc);
+          if (dist < bestDist) { bestDist = dist; best = q; }
+        });
+        return { r: p.placed.r + best.r, c: p.placed.c + best.c };
+      },
+
+      overTray(x, y) {
+        const t = this.host.tray.getBoundingClientRect();
+        return x >= t.left && x <= t.right && y >= t.top && y <= t.bottom;
+      },
+
+      rectsOverlap(a, b) {
+        return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+      },
+
+      ensureBoardVisible() {
+        const b = this.host.board.getBoundingClientRect();
+        if (b.top < 0 || b.bottom > window.innerHeight) this.host.board.scrollIntoView({ block: 'nearest' });
+      }
+    };
+    /* ===== end shared:piece-drag v1 ===== */
+
+    /* ===== shared:board-layout v1 =====
+       Board + tray layout for the grid-packing games (shape-fit/ and
+       through-the-woods/), copied into both like piece-drag and checked the
+       same way by scripts/check-design.js. Two arrangements are solved for
+       the largest board that fits the viewport together with its tray:
+         stack : header row on top, tray under the board
+         side  : header as a left column, tray right of the board (body.side)
+       The bigger board wins and a tie keeps stack, so a screen with room to
+       spare keeps the standard layout. If neither fits at cfg.minCellPx,
+       the page stacks at the floor and scrolls (body.cramped).
+       The host provides mainEl, headerEl, gridWrap, board, tray, N and cfg
+       (maxBoardPx, maxCellPx, minCellPx), and sizes its tray slots off
+       --cell. */
+    const BoardLayout = {
+      fit(h) {
+        const body = document.body, root = document.documentElement;
+        // .grid-wrap's border + padding: constant, so measure it rather than
+        // hard-coding a copy of the CSS here.
+        const chrome = Math.max(0, h.gridWrap.offsetWidth - h.board.clientWidth);
+        const floor = h.cfg.minCellPx * h.N + chrome;
+        // Read the viewport with the board at its floor. A board left at the
+        // previous size's cell (a 4×4 cell on a fresh 6×6 board) can be wider
+        // than the screen, and a mobile browser then zooms out and reports a
+        // taller innerHeight than the screen really has.
+        body.classList.remove('cramped');
+        this.apply(h, floor, chrome);
+        const vw = root.clientWidth, vh = window.innerHeight;
+        if (!vw || !vh) return;
+
+        const stack = this.solve(h, false, vw, vh, floor, chrome);
+        const side = this.solve(h, true, vw, vh, floor, chrome);
+        let best = side.ok && (!stack.ok || side.s > stack.s) ? side : stack;
+        if (!best.ok) best = { side: false, s: floor, trayW: '' };
+        body.classList.toggle('side', best.side);
+        h.tray.style.width = best.trayW;
+        this.apply(h, best.s, chrome);
+        body.classList.toggle('cramped', !best.ok);
+      },
+
+      // Largest board side for one arrangement. The tray's height is a
+      // function of --cell, and it steps whenever smaller slots fit more of
+      // them per row; as the board grows the tray never gets shorter (and
+      // in side its column only gets narrower), so "fits" flips exactly
+      // once and a binary search finds it. 10 steps take a 560 px range
+      // below 1 px.
+      solve(h, side, vw, vh, floor, chrome) {
+        document.body.classList.toggle('side', side);
+        h.tray.style.width = '';
+        const cs = getComputedStyle(h.mainEl);
+        const gap = parseFloat(side ? cs.columnGap : cs.rowGap) || 0;
+        // From the viewport, not main's own box: main's height depends on
+        // body.cramped, which fit() sets.
+        const availW = vw - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+          - (side ? h.headerEl.offsetWidth + gap : 0);
+        const availH = vh - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
+          - (side ? 0 : h.headerEl.offsetHeight);
+        const t = h.tray;
+        let trayW = '';
+        const fitsAt = (s) => {
+          this.apply(h, s, chrome);
+          if (!side) return s <= availW && s + gap + t.offsetHeight <= availH;
+          const w = Math.floor(availW - s);
+          trayW = Math.max(0, w) + 'px';
+          t.style.width = trayW;
+          // Layout sizes (offset*), so a slot mid deal-pop can't skew them.
+          // Compared against w itself: a flex item never shrinks below its
+          // widest child, so the tray's own width can't show the overflow.
+          const widest = Math.max(0, ...[...t.children].map(c => c.offsetWidth));
+          return s <= availH && widest <= w && t.offsetHeight <= availH;
+        };
+        const cap = Math.max(floor, Math.min(h.cfg.maxBoardPx, h.cfg.maxCellPx * h.N + chrome,
+          side ? availH : availW));
+        let s = cap;
+        if (!fitsAt(s)) {
+          let lo = floor, hi = cap;
+          for (let i = 0; i < 10 && hi - lo > 0.5; i++) {
+            const mid = (lo + hi) / 2;
+            if (fitsAt(mid)) lo = mid; else hi = mid;
+          }
+          s = lo;
+        }
+        return { side, s, ok: fitsAt(s), trayW };
+      },
+
+      // Sizes the board to `s` px (outer, including .grid-wrap's chrome) and
+      // publishes the matching --cell that everything else calc()s from, plus
+      // --board-w for the widths that grow with a big board.
+      apply(h, s, chrome) {
+        const cell = Math.max(h.cfg.minCellPx, (s - chrome) / h.N);
+        const w = cell * h.N + chrome;
+        h.gridWrap.style.width = w + 'px';
+        document.documentElement.style.setProperty('--cell', cell + 'px');
+        document.documentElement.style.setProperty('--board-w', w + 'px');
+      }
+    };
+    /* ===== end shared:board-layout v1 ===== */
+
+    const App = {
+      cfg: CONFIG,
+      pieces: [],       // { cells:[{r,c}] normalized, rows, cols, color, placed:{r,c}|null, el, slotEl }
+      N: 5,
+      size: 'mini',
+      won: false,
+      gameId: 0,
+      audioCtx: null,
+      emojiSets: [
+        ['🎉', '🌟', '🏆'],
+        ['🎈', '🌈', '🎊'],
+        ['🥳', '✨', '🍭']
+      ],
+
+      init() {
+        this.cacheDOM();
+        PieceDrag.init(this);
+        this.bindEvents();
+        document.documentElement.style.setProperty('--tray-scale', CONFIG.trayScale);
+        this.newGame(false);
+        this.setupPWA();
+      },
+
+      cacheDOM() {
+        this.board = document.getElementById('board');
+        this.gridWrap = document.querySelector('.grid-wrap');
+        this.mainEl = document.querySelector('main');
+        this.headerEl = document.querySelector('header');
+        this.tray = document.getElementById('tray');
+        this.status = document.getElementById('status');
+        this.overlay = document.getElementById('win-overlay');
+        this.newGameBtn = document.getElementById('new-game');
+        this.playAgainBtn = document.getElementById('play-again');
+        this.settingsOverlay = document.getElementById('settings-overlay');
+        this.settingsBtn = document.getElementById('settings-btn');
+        this.closeSettingsBtn = document.getElementById('close-settings');
+        this.tutorialOverlay = document.getElementById('tutorial-overlay');
+        this.tutorialBtn = document.getElementById('tutorial-btn');
+        this.closeTutorialBtn = document.getElementById('close-tutorial');
+      },
+
+      bindEvents() {
+        this.bindNewGameHold();
+        this.playAgainBtn.addEventListener('click', () => this.newGame(true));
+        this.settingsBtn.addEventListener('click', () => this.openSettings());
+        this.closeSettingsBtn.addEventListener('click', () => this.closeSettings());
+        this.settingsOverlay.addEventListener('click', (e) => {
+          if (e.target === this.settingsOverlay) this.closeSettings();
+        });
+        this.tutorialBtn.addEventListener('click', () => this.openTutorial());
+        this.closeTutorialBtn.addEventListener('click', () => this.closeTutorial());
+        this.tutorialOverlay.addEventListener('click', (e) => {
+          if (e.target === this.tutorialOverlay) this.closeTutorial();
+        });
+        this.settingsOverlay.querySelectorAll('.size-btn').forEach(btn => {
+          btn.addEventListener('click', () => this.setSize(btn.dataset.size));
+        });
+        // orientationchange as well as resize: some mobile browsers fire the
+        // former without a useful resize, and the layout is now height-aware.
+        // rAF-debounced because setCellSize() measures, and a burst of resizes
+        // during an address-bar collapse would otherwise re-solve per event.
+        let relayout = null;
+        const onViewportChange = () => {
+          if (relayout) return;
+          relayout = requestAnimationFrame(() => {
+            relayout = null;
+            this.setCellSize();
+            PieceDrag.relayout();
+          });
+        };
+        window.addEventListener('resize', onViewportChange);
+        window.addEventListener('orientationchange', onViewportChange);
+      },
+
+      // New Game requires a deliberate hold, not a quick tap, so an
+      // accidental tap can't silently wipe the board. A quick tap/keypress
+      // does nothing; only a sustained HOLD_MS hold re-deals.
+      bindNewGameHold() {
+        const HOLD_MS = 500;
+        const btn = this.newGameBtn;
+        const ring = btn.querySelector('.hold-progress');
+        let timer = null, raf = null, startTime = null, startPt = null, active = false;
+
+        const tick = () => {
+          const pct = Math.min(100, ((performance.now() - startTime) / HOLD_MS) * 100);
+          ring.style.background = `conic-gradient(rgba(47,169,140,0.85) ${pct}%, transparent ${pct}%)`;
+          if (pct < 100) raf = requestAnimationFrame(tick);
+        };
+        const start = () => {
+          if (active) return;
+          active = true;
+          startTime = performance.now();
+          btn.classList.add('holding');
+          tick();
+          timer = setTimeout(() => {
+            active = false;
+            btn.classList.remove('holding');
+            if (navigator.vibrate) navigator.vibrate(40);
+            this.newGame(true);
+          }, HOLD_MS);
+        };
+        const cancel = () => {
+          if (!active) return;
+          active = false;
+          clearTimeout(timer);
+          if (raf) cancelAnimationFrame(raf);
+          btn.classList.remove('holding');
+          ring.style.background = '';
+        };
+
+        btn.addEventListener('pointerdown', (e) => { startPt = { x: e.clientX, y: e.clientY }; start(); });
+        btn.addEventListener('pointermove', (e) => {
+          if (!active || !startPt) return;
+          if (Math.hypot(e.clientX - startPt.x, e.clientY - startPt.y) > 10) cancel();
+        });
+        btn.addEventListener('pointerup', cancel);
+        btn.addEventListener('pointercancel', cancel);
+        btn.addEventListener('pointerleave', cancel);
+        btn.addEventListener('keydown', (e) => {
+          if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) { e.preventDefault(); start(); }
+        });
+        btn.addEventListener('keyup', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') cancel();
+        });
+      },
+
+      /* ---------- puzzle generation ---------- */
+
+      // Partition the n×n grid into connected polyomino regions by
+      // randomized region-growing, so a solution exists by construction.
+      generatePieces(n, minS, maxS) {
+        const total = n * n;
+        const ids = new Array(total).fill(-1);
+        const nb = (i) => {
+          const r = (i / n) | 0, c = i % n, out = [];
+          if (r > 0) out.push(i - n);
+          if (r < n - 1) out.push(i + n);
+          if (c > 0) out.push(i - 1);
+          if (c < n - 1) out.push(i + 1);
+          return out;
+        };
+
+        let pid = 0;
+        for (let seed = 0; seed < total; seed++) {
+          if (ids[seed] !== -1) continue;
+          const target = minS + Math.floor(Math.random() * (maxS - minS + 1));
+          const region = [seed];
+          ids[seed] = pid;
+          while (region.length < target) {
+            const frontier = [];
+            region.forEach(i => nb(i).forEach(j => {
+              if (ids[j] === -1 && !frontier.includes(j)) frontier.push(j);
+            }));
+            if (!frontier.length) break;
+            const j = frontier[(Math.random() * frontier.length) | 0];
+            ids[j] = pid;
+            region.push(j);
+          }
+          pid++;
+        }
+
+        // Growth can strand undersized leftovers; absorb each into an
+        // adjacent region (the union of two adjacent regions stays connected).
+        for (;;) {
+          const sizes = new Map();
+          ids.forEach(id => sizes.set(id, (sizes.get(id) || 0) + 1));
+          let small = -1;
+          for (const [id, s] of sizes) if (s < minS && sizes.size > 1) { small = id; break; }
+          if (small === -1) break;
+          let into = -1;
+          for (let i = 0; i < total && into === -1; i++) {
+            if (ids[i] !== small) continue;
+            for (const j of nb(i)) if (ids[j] !== small) { into = ids[j]; break; }
+          }
+          for (let i = 0; i < total; i++) if (ids[i] === small) ids[i] = into;
+        }
+
+        // Collect cells per region in first-appearance order.
+        const order = new Map();
+        const cellsById = [];
+        ids.forEach((id, i) => {
+          if (!order.has(id)) { order.set(id, cellsById.length); cellsById.push([]); }
+          cellsById[order.get(id)].push({ r: (i / n) | 0, c: i % n });
+        });
+
+        // Greedy coloring over region adjacency so touching pieces never
+        // share a color; palette order is shuffled per game for variety.
+        const adj = cellsById.map(() => new Set());
+        ids.forEach((id, i) => {
+          nb(i).forEach(j => {
+            if (ids[j] !== id) adj[order.get(id)].add(order.get(ids[j]));
+          });
+        });
+        const paletteOrder = this.shuffle(CONFIG.palette.map((_, i) => i));
+        const colorIdx = new Array(cellsById.length).fill(-1);
+        cellsById.forEach((_, k) => {
+          const used = new Set([...adj[k]].map(m => colorIdx[m]).filter(v => v >= 0));
+          let pick = paletteOrder.find(ci => !used.has(ci));
+          if (pick === undefined) pick = paletteOrder[(Math.random() * paletteOrder.length) | 0];
+          colorIdx[k] = pick;
+        });
+
+        return cellsById.map((cells, k) => {
+          const minR = Math.min(...cells.map(c => c.r));
+          const minC = Math.min(...cells.map(c => c.c));
+          const norm = cells.map(({ r, c }) => ({ r: r - minR, c: c - minC }));
+          return {
+            cells: norm,
+            rows: Math.max(...norm.map(c => c.r)) + 1,
+            cols: Math.max(...norm.map(c => c.c)) + 1,
+            color: CONFIG.palette[colorIdx[k]],
+            placed: null,
+            el: null,
+            slotEl: null
+          };
+        });
+      },
+
+      /* ---------- game flow ---------- */
+
+      newGame(animated) {
+        this.overlay.classList.remove('show');
+        Modal.close();
+        this.gameId++;
+        this.won = false;
+        PieceDrag.reset();
+        const { n, minPiece, maxPiece, rotate } = CONFIG.sizes[this.size];
+        this.N = n;
+        this.pieces = this.shuffle(this.generatePieces(n, minPiece, maxPiece));
+        if (rotate) {
+          this.pieces.forEach(p => {
+            for (let k = Math.floor(Math.random() * 4); k > 0; k--) {
+              p.cells = this.rotateCells(p.cells);
+              [p.rows, p.cols] = [p.cols, p.rows];
+            }
+          });
+        }
+
+        if (animated && this.tray.children.length > 0) {
+          // Re-deal visibly (design principle 9): everything sucks away first.
+          this.audioSwoosh();
+          [...this.tray.children].forEach(el => el.classList.add('out'));
+          [...this.board.querySelectorAll('.piece')].forEach(el => el.classList.add('out'));
+          setTimeout(() => this.renderAll(true), 230);
+        } else {
+          this.renderAll(animated);
+        }
+        this.updateStatus('');
+      },
+
+      renderAll(deal) {
+        this.board.style.gridTemplateColumns = `repeat(${this.N}, 1fr)`;
+        this.board.style.gridTemplateRows = `repeat(${this.N}, 1fr)`;
+        this.board.innerHTML = '';
+        this.cellEls = [];
+        for (let i = 0; i < this.N * this.N; i++) {
+          const cell = document.createElement('div');
+          cell.className = 'cell';
+          cell.setAttribute('aria-hidden', 'true');
+          this.board.appendChild(cell);
+          this.cellEls.push(cell);
+        }
+
+        this.tray.innerHTML = '';
+        this.pieces.forEach((p, i) => {
+          this.buildPieceEl(p);
+          const slot = PieceDrag.makeSlot(p);
+          if (deal) {
+            slot.classList.add('deal');
+            slot.style.setProperty('--d', `${i * CONFIG.dealStaggerMs}ms`);
+            // The fill-mode transform must be cleared once the pop-in ends:
+            // any ancestor with a transform becomes the containing block for
+            // position:fixed, which would anchor the dragged piece to this
+            // little slot instead of the viewport.
+            slot.addEventListener('animationend', () => slot.classList.remove('deal'), { once: true });
+          }
+          this.tray.appendChild(slot);
+        });
+        this.setCellSize();
+      },
+
+      buildPieceEl(p) {
+        p.el = document.createElement('div');
+        p.el.className = 'piece';
+        this.paintPiece(p);
+        return p.el;
+      },
+
+      // Draws p's blocks for its current cells (again after every turn).
+      paintPiece(p) {
+        const el = p.el;
+        el.innerHTML = '';
+        el.style.width = `calc(var(--cell) * ${p.cols})`;
+        el.style.height = `calc(var(--cell) * ${p.rows})`;
+        el.setAttribute('aria-label', `${p.color.name} piece, ${p.cells.length} blocks`);
+        // Blocks merge into one solid shape: no inset or border on edges
+        // shared with a sibling block; the piece's outer perimeter gets an
+        // inset gap, a darker outline and a bevel, so two same-colored
+        // pieces placed side by side never blend together.
+        const has = new Set(p.cells.map(({ r, c }) => `${r},${c}`));
+        const INSET = 2, EDGE = 3, RADIUS = 10;
+        p.cells.forEach(({ r, c }) => {
+          const up = has.has(`${r - 1},${c}`), down = has.has(`${r + 1},${c}`);
+          const left = has.has(`${r},${c - 1}`), right = has.has(`${r},${c + 1}`);
+          const b = document.createElement('div');
+          b.className = 'blk';
+          b.style.left = `calc(var(--cell) * ${c} + ${left ? 0 : INSET}px)`;
+          b.style.top = `calc(var(--cell) * ${r} + ${up ? 0 : INSET}px)`;
+          b.style.width = `calc(var(--cell) - ${(left ? 0 : INSET) + (right ? 0 : INSET)}px)`;
+          b.style.height = `calc(var(--cell) - ${(up ? 0 : INSET) + (down ? 0 : INSET)}px)`;
+          b.style.background = p.color.fill;
+          b.style.borderColor = p.color.edge;
+          b.style.borderWidth = `${up ? 0 : EDGE}px ${right ? 0 : EDGE}px ${down ? 0 : EDGE}px ${left ? 0 : EDGE}px`;
+          b.style.borderRadius = `${!up && !left ? RADIUS : 0}px ${!up && !right ? RADIUS : 0}px ${!down && !right ? RADIUS : 0}px ${!down && !left ? RADIUS : 0}px`;
+          const bevel = [];
+          if (!up) bevel.push('inset 0 3px 0 rgba(255,255,255,0.4)');
+          if (!down) bevel.push('inset 0 -3px 0 rgba(0,0,0,0.08)');
+          if (bevel.length) b.style.boxShadow = bevel.join(', ');
+          el.appendChild(b);
+        });
+      },
+
+      // Board + tray sizing and arrangement: see the shared board-layout block.
+      setCellSize() { BoardLayout.fit(this); },
+
+      /* ---------- PieceDrag host: placement rules ---------- */
+
+      describe(p) { return `${p.color.name} piece`; },
+
+      occupancy(except) {
+        const occ = new Array(this.N * this.N).fill(false);
+        this.pieces.forEach(p => {
+          if (!p.placed || p === except) return;
+          p.cells.forEach(({ r, c }) => { occ[(p.placed.r + r) * this.N + (p.placed.c + c)] = true; });
+        });
+        return occ;
+      },
+
+      fits(p, r, c, cells = p.cells) {
+        const occ = this.occupancy(p);
+        return cells.every(({ r: dr, c: dc }) => {
+          const rr = r + dr, cc = c + dc;
+          return rr >= 0 && rr < this.N && cc >= 0 && cc < this.N && !occ[rr * this.N + cc];
+        });
+      },
+
+      // Pieces turn only on the level that deals them turned (Hard); on the
+      // others a tap just wiggles the piece.
+      canTurn() { return !!CONFIG.sizes[this.size].rotate; },
+
+      turnedCells(p) { return this.rotateCells(p.cells); },
+
+      applyTurn(p) {
+        p.cells = this.rotateCells(p.cells);
+        [p.rows, p.cols] = [p.cols, p.rows];
+        this.paintPiece(p);
+      },
+
+      // One clockwise quarter turn of a normalized cell list.
+      rotateCells(cells) {
+        const rows = Math.max(...cells.map(q => q.r)) + 1;
+        return cells.map(({ r, c }) => ({ r: c, c: rows - 1 - r }));
+      },
+
+      onPlaced(p, how) {
+        if (how === 'drop' || how === 'key') {
+          this.audioPlace();
+          this.updateStatus(`Placed the ${p.color.name} piece.`);
+        }
+        this.checkWin();
+      },
+
+      onTray() {},
+
+      checkWin() {
+        if (this.won || !this.pieces.every(p => p.placed)) return;
+        this.won = true;
+        const gen = this.gameId;
+        setTimeout(() => { if (gen === this.gameId) this.celebrate(); }, 350);
+      },
+
+      /* ---------- win / settings ---------- */
+
+      celebrate() {
+        const tier = CONFIG.celebrationTiers[Object.keys(CONFIG.sizes).indexOf(this.size)];
+        this.audioWin(tier.notes);
+        this.updateStatus('The whole board is full. You did it!');
+        this.renderWinEmojis();
+        this.overlay.classList.add('show');
+        Modal.open(this.overlay, () => this.newGame(true));
+        for (let i = 0; i < tier.confetti; i++) {
+          const conf = document.createElement('div');
+          conf.className = 'confetti';
+          conf.style.left = Math.random() * 100 + 'vw';
+          conf.style.background = CONFIG.palette[Math.floor(Math.random() * CONFIG.palette.length)].fill;
+          conf.style.width = (6 + Math.random() * 8) + 'px';
+          conf.style.height = (6 + Math.random() * 8) + 'px';
+          conf.style.animationDuration = (1.5 + Math.random() * 2) + 's';
+          conf.style.animationDelay = (Math.random() * 0.8) + 's';
+          document.body.appendChild(conf);
+          setTimeout(() => conf.remove(), 4500);
+        }
+      },
+
+      renderWinEmojis() {
+        const row = document.getElementById('emoji-row');
+        const set = this.emojiSets[Math.floor(Math.random() * this.emojiSets.length)];
+        row.innerHTML = set.map(e => `<button>${e}</button>`).join('');
+        // Poking a celebration emoji wiggles it and chirps — a tiny toy.
+        row.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+          btn.classList.remove('wiggle');
+          void btn.offsetWidth;
+          btn.classList.add('wiggle');
+          this.audioEmoji();
+        }));
+      },
+
+      openSettings() {
+        this.settingsOverlay.classList.add('show');
+        this.updateSizeButtons();
+        Modal.open(this.settingsOverlay, () => this.closeSettings());
+      },
+
+      closeSettings() {
+        this.settingsOverlay.classList.remove('show');
+        Modal.close();
+      },
+
+      openTutorial() {
+        this.tutorialOverlay.classList.add('show');
+        Modal.open(this.tutorialOverlay, () => this.closeTutorial());
+      },
+
+      closeTutorial() {
+        this.tutorialOverlay.classList.remove('show');
+        Modal.close();
+      },
+
+      setSize(size) {
+        if (size === this.size) {
+          this.closeSettings();
+          return;
+        }
+        this.size = size;
+        this.updateSizeButtons();
+        // Close first so the re-deal is visible, never a silent reset
+        // behind the overlay (design principle 9).
+        this.closeSettings();
+        this.newGame(true);
+      },
+
+      updateSizeButtons() {
+        this.settingsOverlay.querySelectorAll('.size-btn').forEach(btn => {
+          const active = btn.dataset.size === this.size;
+          btn.classList.toggle('active', active);
+          btn.setAttribute('aria-checked', active ? 'true' : 'false');
+        });
+      },
+
+      shuffle(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+      },
+
+      updateStatus(msg) {
+        this.status.textContent = msg;
+      },
+
+      /* ---------- PWA ---------- */
+
+      setupPWA() {
+        // The whole toybox is one PWA: a single shared manifest
+        // (../manifest.webmanifest, linked in <head>) and one root-scoped
+        // service worker. Browsers reject blob:/data: worker scripts and
+        // file:// has no SW support, so register only over http(s).
+        if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+          navigator.serviceWorker.register('../sw.js').then((root) => {
+            // Drop any old per-game worker from before unification so the one
+            // root worker controls this page (longest scope wins).
+            navigator.serviceWorker.getRegistrations().then((regs) =>
+              regs.forEach((r) => {
+                if (r !== root && r.scope.startsWith(root.scope) && r.scope !== root.scope) r.unregister();
+              })
+            );
+          }).catch(() => {});
+        }
+      },
+
+      /* ---------- audio ---------- */
+
+      ensureAudio() {
+        if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (this.audioCtx.state === 'suspended') this.audioCtx.resume();
+      },
+
+      playTone({ type = 'sine', freq = 440, duration = 100, startGain = 0.0001, peakGain = 0.15 }) {
+        this.ensureAudio();
+        const ctx = this.audioCtx;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        gain.gain.setValueAtTime(startGain, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(peakGain, ctx.currentTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration / 1000);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + duration / 1000 + 0.02);
+      },
+
+      audioPickup() { this.playTone({ type: 'sine', freq: 660, duration: 60, peakGain: 0.1 }); },
+      audioPlace() {
+        this.playTone({ type: 'sine', freq: 540, duration: 80, peakGain: 0.16 });
+        setTimeout(() => this.playTone({ type: 'sine', freq: 810, duration: 70, peakGain: 0.13 }), 70);
+      },
+      // A quick two-step click for a quarter turn.
+      audioTurn() {
+        this.playTone({ type: 'triangle', freq: 720, duration: 45, peakGain: 0.12 });
+        setTimeout(() => this.playTone({ type: 'triangle', freq: 960, duration: 45, peakGain: 0.1 }), 55);
+      },
+      // Gentle "hmm", not a punitive buzz (design principle 3)
+      audioOops() { this.playTone({ type: 'sine', freq: 240, duration: 160, peakGain: 0.1 }); },
+      audioEmoji() {
+        const freq = [523, 587, 659, 784, 880][Math.floor(Math.random() * 5)]; // pentatonic chirp
+        this.playTone({ type: 'sine', freq, duration: 140, peakGain: 0.15 });
+      },
+      audioSwoosh() {
+        this.ensureAudio();
+        const ctx = this.audioCtx;
+        const bufferSize = ctx.sampleRate * 0.1;
+        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.12, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.1);
+        src.connect(gain).connect(ctx.destination);
+        src.start();
+      },
+      audioWin(notes) {
+        notes.forEach((freq, i) => {
+          setTimeout(() => this.playTone({ type: 'sine', freq, duration: 220, peakGain: 0.18 }), i * 180);
+        });
+      }
+    };
+
+    App.init();
+  </script>
+</body>
+</html>

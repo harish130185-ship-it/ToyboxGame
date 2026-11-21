@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<!-- LibreToybox — Memory · Licensed under the GNU GPL v3.0; see ../LICENSE -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Memory</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪁</text></svg>" />
+  <link rel="manifest" href="../manifest.webmanifest" />
+  <meta name="theme-color" content="#54A6D2" />
+  <style>
+    :root {
+      --bg1: #EFF8FF;
+      --bg2: #D9E4FF;
+      --accent: #54A6D2;
+      /* Card back = shape-fit's "blue" swatch: flat pastel fill with a
+         darker same-hue edge, the shared piece language across the suite.
+         Blue keeps the whole game in its ice-blue background family. */
+      --back: #8ED3F4;
+      --back-edge: #54A6D2;
+      --matched-bg: #EAFBEF;
+      --matched-border: #7CCB8B;
+      --border: #B0C4DE;
+      --text: #3E4450;
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    /* Own background on html stops the body gradient propagating to the
+       canvas, where it would tile — rubber-band overscroll then shows the
+       wrong end of the gradient instead of blending with the page. */
+    html { background: var(--bg1); }
+    body {
+      font-family: ui-rounded, 'Hiragino Maru Gothic ProN', Quicksand, Comfortaa, 'Arial Rounded MT Bold', 'Varela Round', Calibri, sans-serif;
+      background: linear-gradient(180deg, var(--bg1), var(--bg2));
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      overflow-x: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+
+    header {
+      width: 100%;
+      max-width: 420px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px 6px;
+    }
+    .header-left { display: flex; align-items: center; gap: 8px; }
+    .logo { display: flex; align-items: center; }
+    .top-btns { display: flex; gap: 8px; }
+    .top-btn {
+      position: relative;
+      background: #fff;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 6px 10px;
+      font-family: inherit;
+      font-size: 1.3rem;
+      cursor: pointer;
+      box-shadow: 0 3px 0 #dbe3ef;
+      transition: transform .05s;
+      min-width: 48px;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      color: inherit;
+    }
+    .top-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #dbe3ef; }
+    /* New Game requires a deliberate hold, not a quick tap, so an accidental
+       tap can't silently wipe the board. */
+    .hold-progress { position: absolute; inset: 5px; border-radius: 50%; pointer-events: none; opacity: 0; transition: opacity .1s; }
+    .top-btn.holding .hold-progress { opacity: 1; }
+
+    main { width: 100%; max-width: 420px; padding: 8px 16px 18px; display: flex; flex-direction: column; align-items: center; gap: 16px; }
+
+    .grid-wrap {
+      width: min(92vw, 360px);
+      background: #fff;
+      border: 4px solid #7A8BA6;
+      border-radius: 14px;
+      padding: 8px;
+      box-shadow: 0 8px 22px rgba(0,0,0,0.12);
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+    }
+
+    .card {
+      position: relative;
+      aspect-ratio: 1 / 1;
+      min-width: 60px;
+      min-height: 60px;
+      background: transparent;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      perspective: 600px;
+      font-family: inherit;
+    }
+    .card:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; border-radius: 12px; }
+    .card.matched { cursor: default; }
+
+    .card-inner {
+      position: relative;
+      display: block;
+      width: 100%;
+      height: 100%;
+      transform-style: preserve-3d;
+      transition: transform var(--flip-ms, 250ms) ease;
+    }
+    .card.flipped .card-inner { transform: rotateY(180deg); }
+
+    .card-face {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+      border: 2px solid var(--border);
+      font-size: clamp(1.6rem, 8vw, 2.3rem);
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
+    }
+    .card-face.back {
+      background: var(--back);
+      border-color: var(--back-edge);
+      color: rgba(255,255,255,0.9);
+      font-size: clamp(1.2rem, 6vw, 1.7rem);
+    }
+    .card-face.front {
+      background: #fff;
+      transform: rotateY(180deg);
+    }
+    .card.matched .card-face.front { background: var(--matched-bg); border-color: var(--matched-border); }
+
+    .card.deal { animation: pop .3s ease-out both; animation-delay: var(--d, 0s); }
+    .card.out { animation: suction .22s ease-in forwards; }
+    /* Animates the outer .card, not .card-inner — .card-inner already owns
+       the rotateY flip transform, and a transform-animation on the same
+       element would override it for the animation's duration, flashing the
+       card back to its unflipped face. */
+    .card.matched-pop { animation: pop .35s ease-out both; animation-delay: var(--d, 0s); }
+    /* Matched pairs fly away but keep their grid slot, so the remaining
+       cards never shift position under the child's fingers. */
+    .card.gone { animation: suction .3s ease-in forwards; pointer-events: none; }
+
+    /* Visually hidden but available to screen readers (aria-live announcements
+       still fire). Standard clip-based sr-only pattern. */
+    .status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+    @keyframes pop { 0% { transform: scale(0.6); opacity: 0.4; } 60% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+    @keyframes suction { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(0.1); opacity: 0; } }
+    @keyframes fall { 0% { transform: translateY(-10vh) rotate(0deg); opacity: 1; } 100% { transform: translateY(110vh) rotate(720deg); opacity: 0; } }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      text-align: center;
+      padding: 20px;
+    }
+    .overlay.show { display: flex; }
+    /* Win overlay stays translucent so the finished board remains visible
+       beneath the celebration (unlike Sudoku's opaque overlay — see plan.md). */
+    #win-overlay { background: rgba(255,255,255,0.55); justify-content: flex-end; padding-bottom: 12vh; }
+    #settings-overlay, #tutorial-overlay { background: rgba(255,255,255,0.92); }
+    .emoji-row { font-size: 4.5rem; display: flex; gap: 18px; margin-bottom: 22px; }
+    .emoji-row button { background: none; border: none; padding: 0; font: inherit; cursor: pointer; animation: pop .6s ease-out both; }
+    .emoji-row button:nth-child(2) { animation-delay: .15s; }
+    .emoji-row button:nth-child(3) { animation-delay: .3s; }
+    .emoji-row button:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; border-radius: 12px; }
+    .emoji-row button.wiggle { animation: wiggle .5s ease; }
+    @keyframes wiggle { 0%, 100% { transform: rotate(0) scale(1); } 25% { transform: rotate(-12deg) scale(1.25); } 55% { transform: rotate(9deg) scale(1.12); } 80% { transform: rotate(-4deg) scale(1.04); } }
+    .confetti { position: fixed; top: 0; left: 0; width: 10px; height: 10px; pointer-events: none; z-index: 101; animation: fall linear forwards; }
+
+    .settings-card {
+      background: #fff;
+      border: 3px solid var(--border);
+      border-radius: 18px;
+      padding: 22px 26px;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.15);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      min-width: 260px;
+    }
+    .settings-card h2 { margin: 0; font-size: 2rem; }
+    .size-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 18px; max-width: 252px; }
+    .size-btn {
+      width: 72px;
+      height: 72px;
+      border: 2px solid var(--border);
+      border-radius: 16px;
+      background: #fff;
+      font-family: inherit;
+      font-size: 1.7rem;
+      cursor: pointer;
+      box-shadow: 0 4px 0 #dbe3ef;
+      transition: transform .05s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      color: var(--text);
+    }
+    .size-btn small { font-size: 0.8rem; }
+    .size-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #dbe3ef; }
+    .size-btn.active { box-shadow: 0 0 0 4px gold, 0 4px 0 #dbe3ef; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <a class="top-btn" id="back-btn" href="../index.html" aria-label="Back to LibreToybox home">🏠</a>
+      <div class="logo" role="img" aria-label="Memory" title="Memory">
+        <svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true">
+          <rect x="3" y="8" width="24" height="30" rx="6" fill="#8ED3F4" stroke="#54A6D2" stroke-width="2" transform="rotate(-8 15 23)"/>
+          <text x="14" y="30" text-anchor="middle" font-family="Arial Rounded MT Bold, Arial, sans-serif" font-size="16" fill="#fff" transform="rotate(-8 15 23)">?</text>
+          <rect x="21" y="10" width="24" height="30" rx="6" fill="#fff" stroke="#54A6D2" stroke-width="2.5" transform="rotate(8 33 25)"/>
+          <text x="33" y="31" text-anchor="middle" font-size="15" transform="rotate(8 33 25)">🐶</text>
+        </svg>
+      </div>
+    </div>
+    <div class="top-btns">
+      <button class="top-btn" id="new-game" aria-label="New Game">🔄<span class="hold-progress" aria-hidden="true"></span></button>
+      <button class="top-btn" id="settings-btn" aria-label="Settings">⚙️</button>
+      <button class="top-btn" id="tutorial-btn" aria-label="How to Play">❓</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="status" id="status" aria-live="polite"></div>
+    <div class="grid-wrap" id="board" role="grid" aria-label="Memory board"></div>
+  </main>
+
+  <div class="overlay" id="win-overlay" role="dialog" aria-modal="true" aria-label="You won">
+    <div class="emoji-row" id="emoji-row"></div>
+    <div class="top-btns">
+      <a class="top-btn" id="win-home-btn" href="../index.html" aria-label="Back to LibreToybox home">🏠</a>
+      <button class="top-btn" id="play-again" aria-label="Play Again">🔄</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="settings-overlay" role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="settings-card">
+      <h2>⚙️</h2>
+      <div class="size-row" role="radiogroup" aria-label="Board size">
+        <button class="size-btn" data-size="small" role="radio" aria-label="Easy, 4 by 4">🐣<small>4×4</small></button>
+        <button class="size-btn" data-size="medium" role="radio" aria-label="Normal, 5 by 4">🕊️<small>5×4</small></button>
+        <button class="size-btn" data-size="large" role="radio" aria-label="Hard, 6 by 4">🦅<small>6×4</small></button>
+      </div>
+      <button class="top-btn" id="close-settings" aria-label="Close">✕</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="tutorial-overlay" role="dialog" aria-modal="true" aria-label="How to Play">
+    <div class="settings-card">
+      <h2>🎓</h2>
+      <p>Tutorial coming soon!</p>
+      <button class="top-btn" id="close-tutorial" aria-label="Close">✕</button>
+    </div>
+  </div>
+
+  <script>
+    // All tuning lives here — sizes, timings, and the face pool.
+    const CONFIG = {
+      sizes: {
+        small: { pairs: 8, cols: 4 },
+        medium: { pairs: 10, cols: 4 },
+        large: { pairs: 12, cols: 4 }
+      },
+      // Celebration grows with difficulty — Easy is today's unchanged baseline,
+      // Normal/Hard add more confetti and extra rising notes on the same fanfare.
+      celebrationTiers: [
+        { confetti: 60,  notes: [523.25, 659.25, 783.99] },
+        { confetti: 90,  notes: [523.25, 659.25, 783.99, 1046.50] },
+        { confetti: 130, notes: [523.25, 659.25, 783.99, 1046.50, 1318.51] }
+      ],
+      flipMs: 250,
+      mismatchHoldMs: 900,
+      matchGoneMs: 650,
+      dealStaggerMs: 25,
+      emojiPool: ['🐶','🐱','🦊','🐸','🐢','🦋','🐝','🐙','🐬','🦉','🍓','🍌','🍉','🌈','⭐','🚀','🎈','🌻']
+    };
+
+    // --- Shared modal a11y helper (copied into each game — the suite ships no
+    // bundler). Moves focus into an opened overlay, traps Tab within it, closes
+    // on Escape, and restores focus to the opener on close (design principle 8). ---
+    const Modal = {
+      opener: null, overlay: null, onDismiss: null, handler: null,
+      focusable(el) {
+        return [...el.querySelectorAll('a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+          .filter(n => n.getClientRects().length > 0);
+      },
+      open(overlay, onDismiss) {
+        this.opener = document.activeElement;
+        this.overlay = overlay;
+        this.onDismiss = onDismiss || null;
+        const items = this.focusable(overlay);
+        (items[0] || overlay).focus({ preventScroll: true });
+        this.handler = (e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            if (this.onDismiss) this.onDismiss(); else this.close();
+          } else if (e.key === 'Tab') {
+            const f = this.focusable(overlay);
+            if (!f.length) { e.preventDefault(); return; }
+            const first = f[0], last = f[f.length - 1];
+            if (e.shiftKey && (document.activeElement === first || !overlay.contains(document.activeElement))) {
+              e.preventDefault(); last.focus();
+            } else if (!e.shiftKey && (document.activeElement === last || !overlay.contains(document.activeElement))) {
+              e.preventDefault(); first.focus();
+            }
+          }
+        };
+        document.addEventListener('keydown', this.handler, true);
+      },
+      close() {
+        if (this.handler) document.removeEventListener('keydown', this.handler, true);
+        this.handler = null;
+        const opener = this.opener;
+        this.opener = this.overlay = this.onDismiss = null;
+        if (opener && opener.focus) opener.focus({ preventScroll: true });
+      }
+    };
+
+    const App = {
+      cards: [],            // { emoji, flipped, matched }
+      firstPick: null,      // index of the single face-up unmatched card
+      pendingMismatch: null,// [i, j] waiting to flip back
+      mismatchTimer: null,
+      size: 'small',
+      won: false,
+      audioCtx: null,
+      emojiSets: [
+        ['🎉', '🌟', '🏆'],
+        ['🎈', '🌈', '🎊'],
+        ['🥳', '✨', '🍭']
+      ],
+
+      init() {
+        this.cacheDOM();
+        // Keep the flip animation's duration governed by CONFIG.flipMs (single
+        // source of tuning) rather than a separate hardcoded value in the CSS.
+        document.documentElement.style.setProperty('--flip-ms', CONFIG.flipMs + 'ms');
+        this.bindEvents();
+        this.newGame(false);
+        this.setupPWA();
+      },
+
+      cacheDOM() {
+        this.board = document.getElementById('board');
+        this.status = document.getElementById('status');
+        this.overlay = document.getElementById('win-overlay');
+        this.newGameBtn = document.getElementById('new-game');
+        this.playAgainBtn = document.getElementById('play-again');
+        this.settingsOverlay = document.getElementById('settings-overlay');
+        this.settingsBtn = document.getElementById('settings-btn');
+        this.closeSettingsBtn = document.getElementById('close-settings');
+        this.tutorialOverlay = document.getElementById('tutorial-overlay');
+        this.tutorialBtn = document.getElementById('tutorial-btn');
+        this.closeTutorialBtn = document.getElementById('close-tutorial');
+      },
+
+      bindEvents() {
+        this.bindNewGameHold();
+        this.playAgainBtn.addEventListener('click', () => this.newGame(true));
+        this.settingsBtn.addEventListener('click', () => this.openSettings());
+        this.closeSettingsBtn.addEventListener('click', () => this.closeSettings());
+        this.settingsOverlay.addEventListener('click', (e) => {
+          if (e.target === this.settingsOverlay) this.closeSettings();
+        });
+        this.tutorialBtn.addEventListener('click', () => this.openTutorial());
+        this.closeTutorialBtn.addEventListener('click', () => this.closeTutorial());
+        this.tutorialOverlay.addEventListener('click', (e) => {
+          if (e.target === this.tutorialOverlay) this.closeTutorial();
+        });
+        this.settingsOverlay.querySelectorAll('.size-btn').forEach(btn => {
+          btn.addEventListener('click', () => this.setSize(btn.dataset.size));
+        });
+
+        // Cards are real <button>s, so click covers mouse, touch, pen and
+        // Enter/Space keyboard activation in one event stream.
+        this.board.addEventListener('click', (e) => {
+          const card = e.target.closest('.card');
+          if (!card) return;
+          this.cardTapped(parseInt(card.dataset.i, 10));
+        });
+      },
+
+      // New Game requires a deliberate hold, not a quick tap, so an
+      // accidental tap can't silently wipe the board in progress. A quick
+      // tap/keypress does nothing; only a sustained HOLD_MS hold re-deals.
+      bindNewGameHold() {
+        const HOLD_MS = 500;
+        const btn = this.newGameBtn;
+        const ring = btn.querySelector('.hold-progress');
+        let timer = null, raf = null, startTime = null, startPt = null, active = false;
+
+        const tick = () => {
+          const pct = Math.min(100, ((performance.now() - startTime) / HOLD_MS) * 100);
+          ring.style.background = `conic-gradient(rgba(84,166,210,0.85) ${pct}%, transparent ${pct}%)`;
+          if (pct < 100) raf = requestAnimationFrame(tick);
+        };
+        const start = () => {
+          if (active) return;
+          active = true;
+          startTime = performance.now();
+          btn.classList.add('holding');
+          tick();
+          timer = setTimeout(() => {
+            active = false;
+            btn.classList.remove('holding');
+            if (navigator.vibrate) navigator.vibrate(40);
+            this.newGame(true);
+          }, HOLD_MS);
+        };
+        const cancel = () => {
+          if (!active) return;
+          active = false;
+          clearTimeout(timer);
+          if (raf) cancelAnimationFrame(raf);
+          btn.classList.remove('holding');
+          ring.style.background = '';
+        };
+
+        btn.addEventListener('pointerdown', (e) => { startPt = { x: e.clientX, y: e.clientY }; start(); });
+        btn.addEventListener('pointermove', (e) => {
+          if (!active || !startPt) return;
+          if (Math.hypot(e.clientX - startPt.x, e.clientY - startPt.y) > 10) cancel();
+        });
+        btn.addEventListener('pointerup', cancel);
+        btn.addEventListener('pointercancel', cancel);
+        btn.addEventListener('pointerleave', cancel);
+        btn.addEventListener('keydown', (e) => {
+          if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) { e.preventDefault(); start(); }
+        });
+        btn.addEventListener('keyup', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') cancel();
+        });
+      },
+
+      newGame(animated) {
+        this.overlay.classList.remove('show');
+        Modal.close();
+        this.clearMismatchTimer();
+        this.gameId = (this.gameId || 0) + 1; // stale match-removal timers check this
+        this.firstPick = null;
+        this.pendingMismatch = null;
+        this.won = false;
+
+        const { pairs } = CONFIG.sizes[this.size];
+        const pool = CONFIG.emojiPool.slice();
+        this.shuffle(pool);
+        const faces = pool.slice(0, pairs);
+        const deck = this.shuffle([...faces, ...faces]);
+        this.cards = deck.map(emoji => ({ emoji, flipped: false, matched: false }));
+
+        if (animated && this.board.children.length > 0) {
+          // Deal visibly (design principle 9): old cards suck away, new ones pop in.
+          this.audioSwoosh();
+          [...this.board.children].forEach(el => el.classList.add('out'));
+          setTimeout(() => this.renderBoard(true), 230);
+        } else {
+          this.renderBoard(animated);
+        }
+        this.updateStatus('');
+      },
+
+      renderBoard(dealAnimation) {
+        this.board.innerHTML = '';
+        this.board.style.gridTemplateColumns = `repeat(${CONFIG.sizes[this.size].cols}, 1fr)`;
+        this.cards.forEach((card, i) => {
+          const btn = document.createElement('button');
+          btn.className = 'card';
+          btn.dataset.i = i;
+          btn.setAttribute('role', 'gridcell');
+          this.syncCardEl(btn, card);
+          btn.innerHTML = `<span class="card-inner">
+            <span class="card-face back" aria-hidden="true">❓</span>
+            <span class="card-face front" aria-hidden="true">${card.emoji}</span>
+          </span>`;
+          if (dealAnimation) {
+            btn.classList.add('deal');
+            btn.style.setProperty('--d', `${i * CONFIG.dealStaggerMs}ms`);
+          }
+          this.board.appendChild(btn);
+        });
+      },
+
+      syncCardEl(el, card) {
+        el.classList.toggle('flipped', card.flipped || card.matched);
+        el.classList.toggle('matched', card.matched);
+        el.setAttribute('aria-label', (card.flipped || card.matched) ? card.emoji : 'Hidden card');
+        if (card.matched) {
+          el.setAttribute('aria-disabled', 'true');
+          el.tabIndex = -1;
+        }
+      },
+
+      getCardEl(i) {
+        return this.board.querySelector(`.card[data-i="${i}"]`);
+      },
+
+      cardTapped(i) {
+        if (this.won) return;
+        const card = this.cards[i];
+        if (card.matched || card.flipped) return;
+
+        // A mismatched pair still showing never blocks play (design
+        // principle 10): a third tap flips it back right away.
+        if (this.pendingMismatch) this.resolveMismatch();
+
+        card.flipped = true;
+        this.syncCardEl(this.getCardEl(i), card);
+        this.audioFlip();
+
+        if (this.firstPick === null) {
+          this.firstPick = i;
+          this.updateStatus(`Flipped ${card.emoji}. Find its twin.`);
+          return;
+        }
+
+        const j = this.firstPick;
+        this.firstPick = null;
+        if (this.cards[j].emoji === card.emoji) {
+          this.matchFound(j, i);
+        } else {
+          this.pendingMismatch = [j, i];
+          this.updateStatus('Not a match. They will flip back.');
+          this.mismatchTimer = setTimeout(() => this.resolveMismatch(), CONFIG.mismatchHoldMs);
+        }
+      },
+
+      matchFound(a, b) {
+        [a, b].forEach(i => {
+          this.cards[i].matched = true;
+          const el = this.getCardEl(i);
+          this.syncCardEl(el, this.cards[i]);
+          el.classList.remove('matched-pop');
+          void el.offsetWidth;
+          el.classList.add('matched-pop');
+        });
+        this.audioMatch();
+        this.updateStatus(`Matched a pair of ${this.cards[a].emoji}! They fly away.`);
+        // Let the pair show for a beat, then remove it from the board.
+        const gen = this.gameId;
+        setTimeout(() => {
+          if (gen !== this.gameId) return; // a new game replaced this board
+          [a, b].forEach(i => {
+            const el = this.getCardEl(i);
+            el.classList.add('gone');
+            el.setAttribute('aria-hidden', 'true');
+            el.tabIndex = -1;
+          });
+          this.audioSwoosh();
+          if (this.cards.every(c => c.matched)) {
+            setTimeout(() => { if (gen === this.gameId) this.celebrate(); }, 400);
+          }
+        }, CONFIG.matchGoneMs);
+      },
+
+      resolveMismatch() {
+        this.clearMismatchTimer();
+        if (!this.pendingMismatch) return;
+        const pair = this.pendingMismatch;
+        this.pendingMismatch = null;
+        pair.forEach(i => {
+          this.cards[i].flipped = false;
+          this.syncCardEl(this.getCardEl(i), this.cards[i]);
+        });
+        this.audioOops();
+      },
+
+      clearMismatchTimer() {
+        if (this.mismatchTimer) clearTimeout(this.mismatchTimer);
+        this.mismatchTimer = null;
+      },
+
+      celebrate() {
+        this.won = true;
+        const tier = CONFIG.celebrationTiers[Object.keys(CONFIG.sizes).indexOf(this.size)];
+        this.audioWin(tier.notes);
+        this.updateStatus('All pairs found!');
+        this.revealBoard();
+        this.renderWinEmojis();
+        this.overlay.classList.add('show');
+        Modal.open(this.overlay, () => this.newGame(true));
+        for (let i = 0; i < tier.confetti; i++) {
+          const conf = document.createElement('div');
+          conf.className = 'confetti';
+          conf.style.left = Math.random() * 100 + 'vw';
+          conf.style.background = ['#C3B4F7','#8ED3F4','#FFE66D','#A8E6CF','#F7A6B9','#F9C784'][Math.floor(Math.random()*6)];
+          conf.style.width = (6 + Math.random()*8) + 'px';
+          conf.style.height = (6 + Math.random()*8) + 'px';
+          conf.style.animationDuration = (1.5 + Math.random()*2) + 's';
+          conf.style.animationDelay = (Math.random()*0.8) + 's';
+          document.body.appendChild(conf);
+          setTimeout(() => conf.remove(), 4500);
+        }
+      },
+
+      // Matched pairs fly off the board during play, so the win overlay
+      // would otherwise sit over an empty board. Bring every pair back
+      // face-up, staggered like the initial deal, before the overlay shows.
+      revealBoard() {
+        this.cards.forEach((card, i) => {
+          const el = this.getCardEl(i);
+          el.classList.remove('gone');
+          el.removeAttribute('aria-hidden');
+          el.classList.remove('matched-pop');
+          el.style.setProperty('--d', `${i * CONFIG.dealStaggerMs}ms`);
+          void el.offsetWidth;
+          el.classList.add('matched-pop');
+        });
+      },
+
+      renderWinEmojis() {
+        const row = document.getElementById('emoji-row');
+        const set = this.emojiSets[Math.floor(Math.random() * this.emojiSets.length)];
+        row.innerHTML = set.map(e => `<button>${e}</button>`).join('');
+        // Poking a celebration emoji wiggles it and chirps — a tiny toy.
+        row.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+          btn.classList.remove('wiggle');
+          void btn.offsetWidth;
+          btn.classList.add('wiggle');
+          this.audioEmoji();
+        }));
+      },
+
+      openSettings() {
+        this.settingsOverlay.classList.add('show');
+        this.updateSizeButtons();
+        Modal.open(this.settingsOverlay, () => this.closeSettings());
+      },
+
+      closeSettings() {
+        this.settingsOverlay.classList.remove('show');
+        Modal.close();
+      },
+
+      openTutorial() {
+        this.tutorialOverlay.classList.add('show');
+        Modal.open(this.tutorialOverlay, () => this.closeTutorial());
+      },
+
+      closeTutorial() {
+        this.tutorialOverlay.classList.remove('show');
+        Modal.close();
+      },
+
+      setSize(size) {
+        if (size === this.size) {
+          this.closeSettings();
+          return;
+        }
+        this.size = size;
+        this.updateSizeButtons();
+        // Close first so the re-deal is visible, never a silent reset
+        // behind the overlay (design principle 9).
+        this.closeSettings();
+        this.newGame(true);
+      },
+
+      updateSizeButtons() {
+        this.settingsOverlay.querySelectorAll('.size-btn').forEach(btn => {
+          const active = btn.dataset.size === this.size;
+          btn.classList.toggle('active', active);
+          btn.setAttribute('aria-checked', active ? 'true' : 'false');
+        });
+      },
+
+      shuffle(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+      },
+
+      updateStatus(msg) {
+        this.status.textContent = msg;
+      },
+
+      setupPWA() {
+        // The whole toybox is one PWA: a single shared manifest
+        // (../manifest.webmanifest, linked in <head>) and one root-scoped
+        // service worker. Browsers reject blob:/data: worker scripts and
+        // file:// has no SW support, so register only over http(s).
+        if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+          navigator.serviceWorker.register('../sw.js').then((root) => {
+            // Drop any old per-game worker from before unification so the one
+            // root worker controls this page (longest scope wins).
+            navigator.serviceWorker.getRegistrations().then((regs) =>
+              regs.forEach((r) => {
+                if (r !== root && r.scope.startsWith(root.scope) && r.scope !== root.scope) r.unregister();
+              })
+            );
+          }).catch(() => {});
+        }
+      },
+
+      ensureAudio() {
+        if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (this.audioCtx.state === 'suspended') this.audioCtx.resume();
+      },
+
+      playTone({ type = 'sine', freq = 440, duration = 100, startGain = 0.0001, peakGain = 0.15 }) {
+        this.ensureAudio();
+        const ctx = this.audioCtx;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        gain.gain.setValueAtTime(startGain, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(peakGain, ctx.currentTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration / 1000);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + duration / 1000 + 0.02);
+      },
+
+      audioFlip() { this.playTone({ type: 'sine', freq: 640, duration: 70, peakGain: 0.14 }); },
+      audioMatch() {
+        [660, 880].forEach((freq, i) => {
+          setTimeout(() => this.playTone({ type: 'sine', freq, duration: 140, peakGain: 0.16 }), i * 110);
+        });
+      },
+      // Gentle "hmm", not a punitive buzz (design principle 3)
+      audioOops() { this.playTone({ type: 'sine', freq: 240, duration: 160, peakGain: 0.1 }); },
+      audioEmoji() {
+        const freq = [523, 587, 659, 784, 880][Math.floor(Math.random() * 5)]; // pentatonic chirp
+        this.playTone({ type: 'sine', freq, duration: 140, peakGain: 0.15 });
+      },
+      audioSwoosh() {
+        this.ensureAudio();
+        const ctx = this.audioCtx;
+        const bufferSize = ctx.sampleRate * 0.1;
+        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.12, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.1);
+        src.connect(gain).connect(ctx.destination);
+        src.start();
+      },
+      audioWin(notes) {
+        notes.forEach((freq, i) => {
+          setTimeout(() => this.playTone({ type: 'sine', freq, duration: 220, peakGain: 0.18 }), i * 180);
+        });
+      }
+    };
+
+    App.init();
+  </script>
+</body>
+</html>

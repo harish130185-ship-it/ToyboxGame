@@ -1,0 +1,65 @@
+# LibreToybox — Planned Improvements
+
+Completed items live in `done.md`.
+
+## Child Sudoku (`sudoku-for-minis/index.html`)
+- **Feat: add an animated tutorial**.
+- **Feat? Child soduko hard mode: numbers are not marked as wrong until the end of game.**
+- Feat: - Child soduko mark what existing tiles that would make for a Illegal move. NB - "wrong" placements should still be possible. 
+
+## Exquisite Corpse (`exquisite-corpse/index.html`)
+- **Feat: add an animated tutorial**.
+- **Bug: top ~3px of the last (3rd) section can't be painted** — the very top strip of the final section appears to reject strokes, unlike the same strip in earlier sections. Worth checking `PEEK_PX` and the per-section `ctx.rect()`/`ctx.clip()` math in `redrawCanvas()`, since that's what carves each section's drawable band — not yet investigated further.
+
+## All games
+- **Feat: screen timer** — a visible, parent-configurable play-time timer to help manage screen time. Needs a scoping conversation before implementation: per-game vs. hub-level, whether it interrupts play or just gently notifies, and how it squares with the no-pressure-mechanics rule already in place for in-game timers/counters (e.g. Memory's deliberate "no timer, no move counter"). **Not the same thing** as Calm Corner's Visual Timer (below) — that's a child-facing, freely-settable countdown for tasks/turns, not a parent-configured play-time limiter.
+
+## Calm Corner (`calm-corner/`)
+
+- **Feat: add an animated tutorial** (matches every game's outstanding tutorial item).
+- **Feat: more tools** — a scoping conversation before adding a third tool beyond the Visual Timer and Feelings Check-In (e.g. a visual choice board / first-then schedule, a calm-down breathing visual).
+- **Feat? parent-visible feelings history** — the check-in is currently fully ephemeral (no `localStorage`, resets on reload) by design; a persistent, parent-visible log would be a deliberate scope change, not an oversight, and needs its own conversation (privacy, no-tracking principle, who can see it).
+
+## Repository / Infrastructure
+- **Harmonize the `.logo` representation between each game and the hub.** Every game header shows a bespoke inline-SVG `.logo` (e.g. Memory's two overlapping cards, Sudoku's numbered grid), but the hub's game cards (`index.html`) show a single plain emoji span instead (`<span class="emoji">❓</span>` for Memory, etc.) — a different, simpler representation of the same game. A player should see the same "face" for a game whether they're looking at the hub card or the game's own header. Needs a scoping conversation: reuse each game's existing SVG logo on its hub card (drop the plain-emoji spans), or go the other direction and simplify each game's header to the same plain emoji the hub already uses.
+
+## Memory (`memory/index.html`)
+
+- **Feat: add an animated tutorial**.
+
+## Shape Fit (`shape-fit/index.html`)
+
+- **Feat: add an animated tutorial**.
+
+## Emoji Paint (`emoji-paint/index.html`)
+
+- **Bug (high importance): can't place a stamp while the emoji picker panel is expanded** — with the picker open (the wide-screen docked split-view panel, and/or the modal picker), neither drag-and-drop nor tap-to-place gets an emoji from the picker onto the canvas. Reported by the user 2026-07-22; not yet investigated further.
+- **feat** add ability to paint in emoji paint with normal strokes. Evaluate how this would impact the link sharing feature first.
+- **feat** experimental new layout: horizontal where left half is a emoji picker, and right half is the canvas. Drag and drops emojis from left to right.
+- **Feat: add an animated tutorial**.
+
+## Odd One Out (`odd-one-out/index.html`)
+
+- **Feat: add an animated tutorial**.
+
+## Math fun (`grocery-cashier/index.html`)
+
+- **Feat: add an animated tutorial**.
+- **Feat? wrong-answer cooldown** — Odd One Out and What Comes Next? both gained an opt-out cooldown toggle (3s lock + shrinking ring after a wrong tap). Deliberately **not** extended here yet: checking a typed answer is numeric-keypad entry (backspace-and-retry), not tapping through a small set of discrete option tiles, so the same "spam through every option" shape doesn't directly apply. Revisit if backspace-mashing turns out to need the same deterrent.
+
+## What Comes Next? (`guess-next-sequence/index.html`)
+
+- **Feat: add an animated tutorial**.
+
+## Path Home (`through-the-woods/index.html`)
+
+- **Feat: add an animated tutorial** (the ❓ overlay is the suite's "coming soon" placeholder).
+- **Feat: walk-home animation** — on a win, Red (and the rabbit) could walk along the lit road to the door before the confetti, using the tile order `trace()` already computes. Today the path lights up and the friends hop in place.
+
+## Future Games
+
+- Simon-style Emoji Echo
+
+## Later / not now
+
+- **Android packaging (Capacitor APK)** — scoped on 2026-07-12 (one Capacitor 8 app wrapping the hub + all games, GitHub Actions build+sign+release on tag push). Deliberately shelved: focus is on the web app and PWA experience first. Revisit this scoping conversation if/when Android packaging becomes a priority again.
