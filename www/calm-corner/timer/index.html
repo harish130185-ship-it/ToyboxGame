@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<!-- LibreToybox — Calm Corner: Visual Timer · Licensed under the GNU GPL v3.0; see ../../LICENSE -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Visual Timer</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪁</text></svg>" />
+  <link rel="manifest" href="../../manifest.webmanifest" />
+  <meta name="theme-color" content="#E8871F" />
+  <style>
+    :root {
+      --bg1: #FFF9F2;
+      --bg2: #FFE0BF;
+      --accent: #E8871F;
+      --border: #F4C79A;
+      --text: #6B3E12;
+      --shadow: #F0CBA0;
+      /* The countdown's own dynamic color system — deliberately separate from
+         the page's warm-orange identity. A regulation tool needs the
+         indicator color itself to carry the "how much time is left" signal
+         (blue → yellow at ≤20% → red at zero), so it can't just be a fixed
+         accent hue the way a game piece is (design principle 11 is
+         intentionally set aside here — see CLAUDE.md's Calm Corner notes). */
+      --time-blue: #3585E3;
+      --time-yellow: #F5D42E;
+      --time-red: #E01D24;
+      --time-track: #232323;
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    html { background: var(--bg1); }
+    body {
+      font-family: ui-rounded, 'Hiragino Maru Gothic ProN', Quicksand, Comfortaa, 'Arial Rounded MT Bold', 'Varela Round', Calibri, sans-serif;
+      background: linear-gradient(180deg, var(--bg1), var(--bg2));
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100%;
+      overflow-x: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      touch-action: manipulation;
+    }
+
+    header {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px 6px;
+    }
+    .header-left { display: flex; align-items: center; gap: 8px; }
+    .title { font-size: 1.3rem; font-weight: bold; }
+    .top-btn {
+      background: #fff;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 6px 10px;
+      font-family: inherit;
+      font-size: 1.3rem;
+      cursor: pointer;
+      box-shadow: 0 3px 0 var(--shadow);
+      transition: transform .05s;
+      min-width: 48px;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      color: inherit;
+    }
+    .top-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--shadow); }
+    .top-btn:focus-visible { outline: 4px solid var(--accent); outline-offset: 2px; }
+    .top-btn.active { box-shadow: 0 0 0 4px var(--accent), 0 3px 0 var(--shadow); }
+    .top-btn[disabled] { opacity: 0.4; cursor: default; }
+
+    main { width: 100%; max-width: 480px; padding: 8px 16px 24px; display: flex; flex-direction: column; align-items: center; }
+
+    .status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+    /* Portrait (default): display stacked above the controls. Landscape
+       flips this to a row via the media query below, so a phone/tablet on
+       its side doesn't have to cram five rows into a short viewport. */
+    .timer-layout { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 18px; }
+    .display-col { display: flex; justify-content: center; width: 100%; }
+    .controls-col { display: flex; flex-direction: column; align-items: center; gap: 18px; width: 100%; }
+
+    /* The countdown itself — a square canvas so switching bar/circle mode
+       never resizes or reflows the page around it. Sized generously for
+       tablets (min-width breakpoint below) while staying comfortable on a
+       small phone; the backing canvas resolution itself is kept in sync via
+       resizeCanvas() so it stays crisp at every size. */
+    .display-wrap {
+      position: relative;
+      width: 100%;
+      max-width: min(300px, 90vw);
+      aspect-ratio: 1 / 1;
+      overflow: hidden;
+      border-radius: 24px;
+    }
+    @media (min-width: 600px) {
+      .display-wrap { max-width: min(420px, 90vw); }
+    }
+    @media (orientation: landscape) {
+      body { justify-content: center; }
+      header { max-width: 720px; position: fixed; top: 0; left: 50%; transform: translateX(-50%); }
+      main { max-width: 720px; }
+      .timer-layout { flex-direction: row; justify-content: center; gap: 32px; }
+      .display-col { width: auto; }
+      .display-wrap { width: auto; max-width: min(60vh, 45vw, 420px); }
+      .controls-col { width: auto; gap: 14px; max-height: 100%; overflow-y: auto; }
+    }
+
+    /* Full screen mode: an enlarged, decluttered view — only the countdown
+       and start/reset stay visible. Header (with the fullscreen toggle
+       itself) is left in place so a child always has a visible way out. */
+    body.fullscreen .row.presets,
+    body.fullscreen .row.adjust-row,
+    body.fullscreen .row.toggle-row { display: none; }
+    body.fullscreen .display-wrap { max-width: min(80vh, 85vw, 640px); }
+    #display {
+      width: 100%;
+      height: 100%;
+      display: block;
+      border-radius: 24px;
+    }
+    #digits {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.4rem;
+      font-weight: bold;
+      color: #fff;
+      pointer-events: none;
+    }
+    #digits.show { display: flex; }
+
+    /* A full-screen "time's up" signal — the whole viewport slowly pulses a
+       translucent red wash (fade in 2s, fade out 2s, repeating) until the
+       child interacts with the page. pointer-events: none throughout, so
+       every control underneath — Reset, presets, the canvas itself — stays
+       tappable right through it; this is an attention cue, not a blocking
+       modal. Lives as a direct child of <body> (not inside .display-wrap)
+       so its position: fixed covers the real viewport, not just the
+       display's own box. */
+    #end-signal {
+      position: fixed;
+      inset: 0;
+      background: var(--time-red);
+      opacity: 0;
+      pointer-events: none;
+      z-index: 999;
+    }
+    #end-signal.active { animation: end-signal-pulse 4s ease-in-out infinite; }
+    @keyframes end-signal-pulse {
+      0%, 100% { opacity: 0; }
+      50% { opacity: 0.55; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      /* Still a persistent, visible cue — just steady instead of pulsing. */
+      #end-signal.active { animation: none; opacity: 0.35; }
+    }
+
+    .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+
+    .preset-btn {
+      min-width: 64px;
+      min-height: 64px;
+      padding: 4px 10px;
+      border: 2px solid var(--border);
+      border-radius: 16px;
+      background: #fff;
+      font-family: inherit;
+      font-size: 1.2rem;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 4px 0 var(--shadow);
+      transition: transform .05s;
+      color: var(--text);
+    }
+    .preset-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 var(--shadow); }
+    .preset-btn:focus-visible { outline: 4px solid var(--accent); outline-offset: 2px; }
+    .preset-btn.active { box-shadow: 0 0 0 4px var(--accent), 0 4px 0 var(--shadow); }
+
+    .adjust-btn {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: #fff;
+      font-size: 1.6rem;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 4px 0 var(--shadow);
+      color: var(--text);
+    }
+    .adjust-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 var(--shadow); }
+    .adjust-btn:focus-visible { outline: 4px solid var(--accent); outline-offset: 2px; }
+    .adjust-btn[disabled] { opacity: 0.4; cursor: default; }
+
+    .control-btn {
+      min-width: 76px;
+      min-height: 76px;
+      border-radius: 50%;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-size: 2rem;
+      cursor: pointer;
+      box-shadow: 0 5px 0 #B0620F;
+      transition: transform .05s;
+    }
+    .control-btn:active { transform: translateY(3px); box-shadow: 0 2px 0 #B0620F; }
+    .control-btn:focus-visible { outline: 4px solid var(--text); outline-offset: 2px; }
+    .control-btn.secondary { background: #fff; color: var(--text); border: 2px solid var(--border); box-shadow: 0 4px 0 var(--shadow); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <a class="top-btn" id="back-btn" href="../" aria-label="Back to Calm Corner">🏠</a>
+      <span class="title">⏱️ Visual Timer</span>
+    </div>
+    <div class="top-btns">
+      <button class="top-btn" id="fullscreen-btn" aria-label="Enter full screen">⛶</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="status" id="status" aria-live="polite"></div>
+
+    <div class="timer-layout">
+      <div class="display-col">
+        <div class="display-wrap">
+          <canvas id="display" width="300" height="300" role="img" aria-label="Time remaining"></canvas>
+          <div id="digits" aria-hidden="true"></div>
+        </div>
+      </div>
+
+      <div class="controls-col">
+        <div class="row presets" role="group" aria-label="Choose a length">
+          <button class="preset-btn" data-mins="1">1 min</button>
+          <button class="preset-btn" data-mins="5">5 min</button>
+          <button class="preset-btn" data-mins="10">10 min</button>
+        </div>
+
+        <div class="row adjust-row">
+          <button class="adjust-btn" id="minus-btn" aria-label="One minute less">−</button>
+          <button class="adjust-btn" id="plus-btn" aria-label="One minute more">+</button>
+        </div>
+
+        <div class="row control-row">
+          <button class="control-btn" id="start-btn" aria-label="Start">▶️</button>
+          <button class="control-btn secondary" id="reset-btn" aria-label="Reset">🔄</button>
+        </div>
+
+        <div class="row toggle-row">
+          <button class="top-btn" id="mode-btn" aria-label="Switch shape">⚪</button>
+          <button class="top-btn" id="digits-btn" aria-label="Toggle numbers">🔢</button>
+          <button class="top-btn active" id="sound-btn" aria-label="Toggle sound" aria-pressed="true">🔔</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div id="end-signal" aria-hidden="true"></div>
+
+<script>
+// A visible, ever-so-glanceable countdown for children who benefit from
+// "how much time is left" being a shape and a color, not a sentence. Modeled
+// directly on a reference GTK4 desktop timer (tiny_timer.py): a blue
+// indicator that turns yellow at ≤20% remaining and red at zero, shown as
+// either a shrinking pie (circle) or a shrinking bar — see CLAUDE.md's Calm
+// Corner notes for the full rationale (this is the one page in the toybox
+// that deliberately breaks the "one fixed hue" rule, on purpose).
+const App = {
+  totalSeconds: 5 * 60,
+  remainingMs: 5 * 60 * 1000,
+  endTime: null,        // performance.now() timestamp the countdown reaches zero at, while running
+  running: false,
+  finished: false,
+  mode: 'circle',        // 'circle' | 'bar'
+  showDigits: false,
+  soundOn: true,
+  raf: null,
+  audioCtx: null,
+  isFullscreen: false,
+  wakeLock: null,
+  resizeRaf: null,
+  supportsFullscreenAPI: !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen),
+
+  init() {
+    this.cacheDOM();
+    this.bindEvents();
+    this.updatePresetButtons();
+    this.updateToggleButtons();
+    this.resizeCanvas();
+    this.updateStatus();
+    this.setupPWA();
+  },
+
+  cacheDOM() {
+    this.canvas = document.getElementById('display');
+    this.ctx = this.canvas.getContext('2d');
+    this.digitsEl = document.getElementById('digits');
+    this.status = document.getElementById('status');
+    this.startBtn = document.getElementById('start-btn');
+    this.resetBtn = document.getElementById('reset-btn');
+    this.minusBtn = document.getElementById('minus-btn');
+    this.plusBtn = document.getElementById('plus-btn');
+    this.modeBtn = document.getElementById('mode-btn');
+    this.digitsBtn = document.getElementById('digits-btn');
+    this.soundBtn = document.getElementById('sound-btn');
+    this.fullscreenBtn = document.getElementById('fullscreen-btn');
+    this.endSignalEl = document.getElementById('end-signal');
+    this.presetBtns = [...document.querySelectorAll('.preset-btn')];
+  },
+
+  bindEvents() {
+    this.presetBtns.forEach((btn) => {
+      btn.addEventListener('click', () => this.setPreset(parseInt(btn.dataset.mins, 10)));
+    });
+    this.minusBtn.addEventListener('click', () => this.adjust(-1));
+    this.plusBtn.addEventListener('click', () => this.adjust(1));
+    this.startBtn.addEventListener('click', () => this.toggleRun());
+    this.resetBtn.addEventListener('click', () => this.reset());
+    this.modeBtn.addEventListener('click', () => this.toggleMode());
+    this.digitsBtn.addEventListener('click', () => this.toggleDigits());
+    this.soundBtn.addEventListener('click', () => this.toggleSound());
+    this.fullscreenBtn.addEventListener('click', () => this.toggleFullscreen());
+    // Pointer Events cover tap/mouse-click/pen with one listener, bound at
+    // the document level since the signal itself is now full-screen — any
+    // interaction anywhere on the page dismisses it. Only meaningful once
+    // finished (dismissEndSignal() no-ops otherwise), so this doesn't change
+    // anything about normal button taps while a countdown is running.
+    document.addEventListener('pointerdown', () => this.dismissEndSignal());
+    document.addEventListener('fullscreenchange', () => this.onFullscreenChange());
+    document.addEventListener('webkitfullscreenchange', () => this.onFullscreenChange());
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') this.updateWakeLock();
+    });
+    window.addEventListener('resize', () => this.scheduleResize());
+    window.addEventListener('orientationchange', () => this.scheduleResize());
+  },
+
+  setPreset(mins) {
+    if (this.running) return;
+    this.totalSeconds = mins * 60;
+    this.remainingMs = this.totalSeconds * 1000;
+    this.finished = false;
+    this.clearEndSignal();
+    this.updatePresetButtons();
+    this.draw();
+    this.updateStatus();
+  },
+
+  // +/- only while idle/paused — adjusting mid-countdown would make "how much
+  // time is left" ambiguous, the opposite of this tool's one job.
+  adjust(deltaMin) {
+    if (this.running) return;
+    const mins = Math.max(1, Math.min(60, Math.round(this.totalSeconds / 60) + deltaMin));
+    this.totalSeconds = mins * 60;
+    this.remainingMs = this.totalSeconds * 1000;
+    this.finished = false;
+    this.clearEndSignal();
+    this.updatePresetButtons();
+    this.draw();
+    this.updateStatus();
+  },
+
+  toggleRun() { this.running ? this.pause() : this.start(); },
+
+  start() {
+    if (this.running || this.totalSeconds <= 0) return;
+    if (this.finished) this.reset();
+    // Unlocks the AudioContext from this direct tap — a genuine user
+    // gesture — well before the finish chime needs it. audioDone() only
+    // ever fires later from a requestAnimationFrame callback, which browsers'
+    // autoplay policies do NOT treat as a user gesture, so without this the
+    // chime would silently fail to play the very first time a countdown
+    // completes.
+    this.ensureAudio();
+    this.running = true;
+    this.endTime = performance.now() + this.remainingMs;
+    this.startBtn.textContent = '⏸️';
+    this.startBtn.setAttribute('aria-label', 'Pause');
+    this.updateWakeLock();
+    this.tick();
+  },
+
+  pause() {
+    if (!this.running) return;
+    this.running = false;
+    this.remainingMs = Math.max(0, this.endTime - performance.now());
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.startBtn.textContent = '▶️';
+    this.startBtn.setAttribute('aria-label', 'Start');
+    this.updateWakeLock();
+    this.updateStatus();
+  },
+
+  reset() {
+    this.running = false;
+    this.finished = false;
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.remainingMs = this.totalSeconds * 1000;
+    this.startBtn.textContent = '▶️';
+    this.startBtn.setAttribute('aria-label', 'Start');
+    this.updateWakeLock();
+    this.clearEndSignal();
+    this.draw();
+    this.updateStatus();
+  },
+
+  // A performance.now()-anchored end time (not a naive per-tick decrement)
+  // keeps the countdown accurate even if the tab is briefly throttled —
+  // mirrors the reference timer's time.monotonic() end-time approach.
+  tick() {
+    if (!this.running) return;
+    this.remainingMs = Math.max(0, this.endTime - performance.now());
+    if (this.remainingMs <= 0) {
+      this.running = false;
+      this.finished = true;
+      this.startBtn.textContent = '▶️';
+      this.startBtn.setAttribute('aria-label', 'Start');
+      this.updateWakeLock();
+      // finished must be set before this draw() — draw() reads it to pick
+      // the solid-red fill; drawing one frame earlier (finished still
+      // false, fraction already at 0) skipped the colored sector entirely
+      // and left the display showing only its dark background.
+      this.draw();
+      this.updateStatus();
+      this.audioDone();
+      this.startEndSignal();
+      return;
+    }
+    this.draw();
+    this.raf = requestAnimationFrame(() => this.tick());
+  },
+
+  // Full screen mode: uses the real Fullscreen API where available (so
+  // browser chrome itself is hidden); on browsers without it (e.g. older
+  // iOS Safari) it falls back to just the CSS "maximized" layout, since a
+  // bigger decluttered view is still worth having even without true OS
+  // full screen. `onFullscreenChange` keeps state in sync when the child
+  // exits via Escape/back-gesture instead of the button.
+  toggleFullscreen() {
+    if (this.supportsFullscreenAPI) {
+      const isFs = document.fullscreenElement || document.webkitFullscreenElement;
+      if (!isFs) {
+        const el = document.documentElement;
+        const req = (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+        if (req && req.catch) req.catch(() => {});
+      } else {
+        const exit = (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        if (exit && exit.catch) exit.catch(() => {});
+      }
+    } else {
+      this.setFullscreenState(!this.isFullscreen);
+    }
+  },
+
+  onFullscreenChange() {
+    this.setFullscreenState(!!(document.fullscreenElement || document.webkitFullscreenElement));
+  },
+
+  setFullscreenState(active) {
+    this.isFullscreen = active;
+    document.body.classList.toggle('fullscreen', active);
+    this.fullscreenBtn.textContent = active ? '✕' : '⛶';
+    this.fullscreenBtn.setAttribute('aria-label', active ? 'Exit full screen' : 'Enter full screen');
+    this.updateWakeLock();
+    requestAnimationFrame(() => this.resizeCanvas());
+  },
+
+  // Keeps the screen awake while the countdown is actually running, or
+  // while full screen (a glanceable display the child is meant to be
+  // looking at shouldn't dim mid-count). Released the instant neither is
+  // true. The Wake Lock API auto-releases on tab-hide, so visibilitychange
+  // re-acquires it once the child comes back if it should still be held.
+  async acquireWakeLock() {
+    if (!('wakeLock' in navigator) || this.wakeLock) return;
+    try {
+      this.wakeLock = await navigator.wakeLock.request('screen');
+      this.wakeLock.addEventListener('release', () => { this.wakeLock = null; });
+    } catch (e) {
+      this.wakeLock = null;
+    }
+  },
+
+  releaseWakeLock() {
+    if (!this.wakeLock) return;
+    const lock = this.wakeLock;
+    this.wakeLock = null;
+    lock.release().catch(() => {});
+  },
+
+  updateWakeLock() {
+    if (this.running || this.isFullscreen) this.acquireWakeLock();
+    else this.releaseWakeLock();
+  },
+
+  scheduleResize() {
+    if (this.resizeRaf) cancelAnimationFrame(this.resizeRaf);
+    this.resizeRaf = requestAnimationFrame(() => this.resizeCanvas());
+  },
+
+  // Keeps the canvas's backing pixel resolution matched to its actual
+  // rendered size (times devicePixelRatio) so the display stays crisp
+  // whether it's small on a phone or filling most of a tablet in full
+  // screen — draw()'s geometry math already works off canvas.width/height,
+  // so no other drawing code needs to change.
+  resizeCanvas() {
+    const rect = this.canvas.parentElement.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const dpr = window.devicePixelRatio || 1;
+    const size = Math.max(1, Math.round(rect.width * dpr));
+    this.canvas.width = size;
+    this.canvas.height = size;
+    this.draw();
+  },
+
+  // Starts the full-screen pulse — a pure CSS infinite animation (see
+  // #end-signal.active in the stylesheet), so there's no JS-managed timer to
+  // track: it just keeps fading in and out (2s each way) until
+  // dismissEndSignal() removes the class.
+  startEndSignal() {
+    this.endSignalEl.classList.add('active');
+  },
+
+  // The one way this ongoing signal ever stops on its own: a tap/click/pen
+  // touch anywhere on the page (see the document-level pointerdown binding
+  // in bindEvents). No-op while a countdown is still running, so this can't
+  // be mistaken for a way to cancel or skip a countdown in progress.
+  dismissEndSignal() {
+    if (!this.finished) return;
+    this.clearEndSignal();
+  },
+
+  clearEndSignal() {
+    this.endSignalEl.classList.remove('active');
+  },
+
+  toggleMode() {
+    this.mode = this.mode === 'circle' ? 'bar' : 'circle';
+    this.modeBtn.textContent = this.mode === 'circle' ? '⚪' : '▭';
+    this.draw();
+  },
+
+  toggleDigits() {
+    this.showDigits = !this.showDigits;
+    this.updateToggleButtons();
+    this.draw();
+  },
+
+  toggleSound() {
+    this.soundOn = !this.soundOn;
+    this.updateToggleButtons();
+  },
+
+  updatePresetButtons() {
+    const mins = Math.round(this.totalSeconds / 60);
+    this.presetBtns.forEach((btn) => btn.classList.toggle('active', parseInt(btn.dataset.mins, 10) === mins));
+    const idle = !this.running;
+    this.minusBtn.disabled = !idle;
+    this.plusBtn.disabled = !idle;
+  },
+
+  updateToggleButtons() {
+    this.digitsBtn.classList.toggle('active', this.showDigits);
+    this.digitsEl.classList.toggle('show', this.showDigits);
+    this.soundBtn.classList.toggle('active', this.soundOn);
+    this.soundBtn.setAttribute('aria-pressed', this.soundOn ? 'true' : 'false');
+  },
+
+  fraction() { return this.totalSeconds > 0 ? Math.max(0, Math.min(1, this.remainingMs / (this.totalSeconds * 1000))) : 0; },
+
+  color(fraction) {
+    if (this.finished) return getComputedStyle(document.documentElement).getPropertyValue('--time-red').trim();
+    const root = getComputedStyle(document.documentElement);
+    return fraction <= 0.20 ? root.getPropertyValue('--time-yellow').trim() : root.getPropertyValue('--time-blue').trim();
+  },
+
+  draw() {
+    const fraction = this.finished ? 1 : this.fraction();
+    const color = this.color(fraction);
+    const w = this.canvas.width, h = this.canvas.height;
+    this.ctx.clearRect(0, 0, w, h);
+    if (this.mode === 'circle') this.drawCircle(w, h, fraction, color);
+    else this.drawBar(w, h, fraction, color);
+
+    if (this.showDigits) {
+      const secs = Math.ceil(this.remainingMs / 1000);
+      const m = Math.floor(secs / 60), s = secs % 60;
+      this.digitsEl.textContent = `${m}:${String(s).padStart(2, '0')}`;
+    }
+  },
+
+  // Filled pie sector sweeping away clockwise from 12 o'clock — remaining
+  // time is the colored sector, elapsed time is the dark gap that grows
+  // clockwise as it shrinks. Same angle math as the reference timer's
+  // draw_circle(), ported straight to a 2D canvas context.
+  drawCircle(w, h, fraction, color) {
+    const cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2 - 6;
+    const track = getComputedStyle(document.documentElement).getPropertyValue('--time-track').trim();
+    this.ctx.beginPath();
+    this.ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    this.ctx.fillStyle = track;
+    this.ctx.fill();
+
+    if (fraction > 0) {
+      const end = -Math.PI / 2;
+      const start = end - Math.PI * 2 * fraction;
+      this.ctx.beginPath();
+      this.ctx.moveTo(cx, cy);
+      this.ctx.arc(cx, cy, r, start, end);
+      this.ctx.closePath();
+      this.ctx.fillStyle = color;
+      this.ctx.fill();
+    }
+  },
+
+  // Horizontal rounded-rect progress bar, filled from the left, centered in
+  // the same square canvas area the circle uses — same rounded-rect-clip
+  // technique as the reference timer's draw_bar(), via a manual round-rect
+  // path instead of Cairo arcs.
+  drawBar(w, h, fraction, color) {
+    const track = getComputedStyle(document.documentElement).getPropertyValue('--time-track').trim();
+    const x = 16, barW = w - 32, barH = 40, y = (h - barH) / 2, radius = barH / 2;
+
+    this.roundedRectPath(x, y, barW, barH, radius);
+    this.ctx.fillStyle = track;
+    this.ctx.fill();
+
+    if (fraction > 0) {
+      this.ctx.save();
+      this.roundedRectPath(x, y, barW, barH, radius);
+      this.ctx.clip();
+      this.ctx.fillStyle = color;
+      this.ctx.fillRect(x, y, barW * fraction, barH);
+      this.ctx.restore();
+    }
+  },
+
+  roundedRectPath(x, y, width, height, radius) {
+    radius = Math.min(radius, width / 2, height / 2);
+    this.ctx.beginPath();
+    this.ctx.moveTo(x + radius, y);
+    this.ctx.arcTo(x + width, y, x + width, y + height, radius);
+    this.ctx.arcTo(x + width, y + height, x, y + height, radius);
+    this.ctx.arcTo(x, y + height, x, y, radius);
+    this.ctx.arcTo(x, y, x + width, y, radius);
+    this.ctx.closePath();
+  },
+
+  updateStatus() {
+    if (this.finished) { this.status.textContent = 'Time is up. Tap the timer to dismiss.'; return; }
+    const secs = Math.ceil(this.remainingMs / 1000);
+    const m = Math.floor(secs / 60), s = secs % 60;
+    this.status.textContent = this.running
+      ? `${m} minute${m === 1 ? '' : 's'}, ${s} second${s === 1 ? '' : 's'} left.`
+      : `Timer set to ${Math.round(this.totalSeconds / 60)} minutes. Not started.`;
+  },
+
+  setupPWA() {
+    // The whole toybox (games and tools alike) is one PWA: a single shared
+    // manifest and one root-scoped service worker. Browsers reject
+    // blob:/data: worker scripts and file:// has no SW support, so register
+    // only over http(s).
+    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+      navigator.serviceWorker.register('../../sw.js').then((root) => {
+        navigator.serviceWorker.getRegistrations().then((regs) =>
+          regs.forEach((r) => {
+            if (r !== root && r.scope.startsWith(root.scope) && r.scope !== root.scope) r.unregister();
+          })
+        );
+      }).catch(() => {});
+    }
+  },
+
+  ensureAudio() {
+    if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (this.audioCtx.state === 'suspended') this.audioCtx.resume();
+  },
+
+  playTone({ type = 'sine', freq = 440, duration = 100, startGain = 0.0001, peakGain = 0.15 }) {
+    this.ensureAudio();
+    const ctx = this.audioCtx;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    gain.gain.setValueAtTime(startGain, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(peakGain, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration / 1000);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + duration / 1000 + 0.02);
+  },
+
+  // A soft two-note chime, not an alarm — running out isn't a failure, and a
+  // startling sound would work against this tool's own purpose. Muteable via
+  // the sound toggle.
+  audioDone() {
+    if (!this.soundOn) return;
+    this.playTone({ type: 'sine', freq: 523.25, duration: 180, peakGain: 0.14 });
+    setTimeout(() => this.playTone({ type: 'sine', freq: 392.00, duration: 260, peakGain: 0.12 }), 160);
+  }
+};
+
+App.init();
+</script>
+</body>
+</html>

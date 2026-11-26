@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">LibreToybox</string>
+    <string name="title_activity_main">LibreToybox</string>
+    <string name="package_name">se.khalid.libretoybox</string>
+    <string name="custom_url_scheme">se.khalid.libretoybox</string>
+</resources>

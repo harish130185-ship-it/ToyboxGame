@@ -1,0 +1,1774 @@
+<!DOCTYPE html>
+<!-- LibreToybox — Emoji Art · Licensed under the GNU GPL v3.0; see ../LICENSE -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Emoji Art</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪁</text></svg>" />
+  <link rel="manifest" href="../manifest.webmanifest" />
+  <meta name="theme-color" content="#DE7590" />
+  <style>
+    :root {
+      --bg1: #FFF3F6;
+      --bg2: #FFDCE6;
+      --accent: #DE7590;
+      --border: #F3C3D1;
+      --text: #5C3347;
+      --shadow: #E3A9BC;
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    /* Own background on html stops the body gradient propagating to the
+       canvas, where it would tile — rubber-band overscroll then shows the
+       wrong end of the gradient instead of blending with the page. */
+    html { background: var(--bg1); }
+    body {
+      font-family: ui-rounded, 'Hiragino Maru Gothic ProN', Quicksand, Comfortaa, 'Arial Rounded MT Bold', 'Varela Round', Calibri, sans-serif;
+      background: linear-gradient(180deg, var(--bg1), var(--bg2));
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+
+    header {
+      width: 100%;
+      align-self: center;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px 6px;
+      flex-shrink: 0;
+    }
+    .header-left { display: flex; align-items: center; gap: 8px; }
+    .logo { display: flex; align-items: center; }
+    .top-btns { display: flex; gap: 8px; }
+    .top-btn {
+      position: relative;
+      background: #fff;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 6px 10px;
+      font-family: inherit;
+      font-size: 1.3rem;
+      cursor: pointer;
+      box-shadow: 0 3px 0 var(--shadow);
+      transition: transform .05s, box-shadow .05s;
+      min-width: 48px;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      color: inherit;
+    }
+    .top-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--shadow); }
+    /* New Painting requires a deliberate hold, not a quick tap, so an
+       accidental tap can't silently wipe the canvas. */
+    .hold-progress { position: absolute; inset: 5px; border-radius: 50%; pointer-events: none; opacity: 0; transition: opacity .1s; }
+    .top-btn.holding .hold-progress { opacity: 1; }
+
+    main {
+      width: 100%;
+      align-self: center;
+      flex: 1;
+      padding: 2px 12px 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      min-height: 0;
+    }
+
+    /* Visually hidden but available to screen readers (aria-live announcements
+       still fire). Standard clip-based sr-only pattern. */
+    #status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+    /* The canvas always fills the available viewport (minus the small margin
+       from main's padding), in any rotation — no aspect cap, no width cap. */
+    #canvas-wrap {
+      position: relative;
+      width: 100%;
+      flex: 1;
+      min-height: 0;
+      background: #fff;
+      border: 3px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.13);
+      overflow: hidden;
+    }
+
+    #drawing-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+      cursor: crosshair;
+      display: block;
+    }
+
+    #toolbar {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    /* Wraps so the ≥64 px controls (design principle 4) never overflow narrow phones. */
+    #tool-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .stamp-btn {
+      width: 64px;
+      height: 64px;
+      border: 3px solid var(--border);
+      border-radius: 12px;
+      background: #fff;
+      font-size: 2rem;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 3px 0 var(--shadow);
+      transition: transform .05s;
+    }
+    .stamp-btn:active { transform: translateY(2px); }
+
+    .action-btn {
+      width: 64px;
+      height: 64px;
+      border: 3px solid var(--border);
+      border-radius: 12px;
+      background: #fff;
+      font-family: inherit;
+      font-size: 1.4rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 3px 0 var(--shadow);
+      transition: transform .05s;
+    }
+    .action-btn:active { transform: translateY(2px); }
+    /* Reddish highlight while the trash tool is armed, or while a lifted
+       stamp is being dragged over it — distinct from the game's normal pink
+       accent, so "this will delete" reads as a deliberate, different state. */
+    #trash-btn.active { border-color: #E53935; background: #FFEBEE; }
+
+    /* Locked (read-only) view for an opened shared-painting link: the whole
+       tool row (stamp/trash/save/share) is replaced by a single Edit
+       affordance until the child taps it — no partial-editable toolbar. */
+    #toolbar.locked #tool-row { display: none; }
+    #locked-banner {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+    }
+    #toolbar.locked #locked-banner { display: flex; }
+    #locked-label { font-size: 1rem; opacity: 0.75; }
+    #edit-btn {
+      height: 64px;
+      padding: 0 22px;
+      border: 3px solid var(--border);
+      border-radius: 12px;
+      background: #fff;
+      font-family: inherit;
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: inherit;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 3px 0 var(--shadow);
+      transition: transform .05s;
+    }
+    #edit-btn:active { transform: translateY(2px); }
+
+    /* The lifted-stamp ghost: a floating emoji that tracks the finger anywhere
+       on screen (canvas draws are clipped to the canvas, so a dragged stamp
+       used to stick at the edge instead of reaching the trash button below). */
+    #lift-ghost {
+      position: fixed;
+      z-index: 60;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+      line-height: 1;
+      filter: drop-shadow(0 4px 6px rgba(0,0,0,0.25));
+      display: none;
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      text-align: center;
+      padding: 24px;
+    }
+    .overlay.show { display: flex; }
+
+    /* Translucent white like every other game's overlay */
+    #picker-overlay, #tutorial-overlay { background: rgba(255,255,255,0.92); }
+
+    /* Tutorial placeholder card — same look as the other games' .settings-card
+       (this game has no settings overlay to borrow the class from). */
+    .tutorial-card {
+      background: #fff;
+      border: 3px solid var(--border);
+      border-radius: 18px;
+      padding: 22px 26px;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.15);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      min-width: 260px;
+    }
+    .tutorial-card h2 { margin: 0; font-size: 2rem; }
+
+    /* Emoji stamp picker — a big scrollable grid the child can sift through */
+    .picker-card {
+      width: min(94vw, 460px);
+      height: min(82vh, 640px);
+      background: #fff;
+      border: 3px solid var(--border);
+      border-radius: 20px;
+      padding: 18px 16px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.18);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .picker-header {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .picker-header h2 { margin: 0; font-size: 1.4rem; }
+    /* Horizontally-scrolling jump chips — one per category (+ Recent, once
+       there's history) — so the child can skip straight to a section
+       instead of scrolling past everything to get there. */
+    .picker-nav {
+      width: 100%;
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      flex-shrink: 0;
+      padding-bottom: 2px;
+    }
+    .nav-chip {
+      width: 48px;
+      height: 48px;
+      flex-shrink: 0;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      background: #fff;
+      font-size: 1.4rem;
+      padding: 0;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform .05s, border-color .1s, background .1s;
+    }
+    .nav-chip.active { border-color: var(--accent); background: #FFE4EC; }
+    .nav-chip:active { transform: scale(0.9); }
+    .nav-chip.hidden { display: none; }
+    .picker-category.empty { display: none; }
+    .picker-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding-right: 2px;
+    }
+    .picker-category { display: flex; flex-direction: column; gap: 8px; }
+    /* A discreet divider instead of a text label — the nav chips already
+       carry each category's identity, and the emoji themselves make each
+       section self-evident without needing to be read. */
+    .picker-divider {
+      align-self: stretch;
+      height: 1px;
+      background: var(--border);
+      opacity: 0.7;
+      flex-shrink: 0;
+    }
+    .picker-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+    }
+    /* Recent stays a single scrollable row instead of wrapping — it's a
+       quick-access strip, not a browsable category. */
+    .recent-grid {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      justify-content: flex-start;
+      padding-bottom: 4px;
+    }
+    .recent-grid .emoji-opt { flex-shrink: 0; }
+    .emoji-opt {
+      width: 60px;
+      height: 60px;
+      border-radius: 12px;
+      border: 2px solid transparent;
+      background: var(--bg1);
+      font-size: 1.8rem;
+      padding: 0;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform .05s, border-color .1s, background .1s;
+    }
+    .emoji-opt.active { border-color: var(--accent); background: #FFE4EC; transform: scale(1.08); }
+    .emoji-opt:active { transform: scale(0.9); }
+
+    /* The split-view toggle only makes sense where there's room for two panes,
+       so it's hidden by default and revealed only at the wide breakpoint below.
+       On a phone the game behaves exactly as before — no toggle, modal picker. */
+    #layout-btn { display: none; }
+    #layout-btn.active { border-color: var(--accent); background: #FFE4EC; }
+
+    /* --- Wide-screen split view --------------------------------------------
+       Opt-in (needs body.split) AND wide enough. When both hold, <main> becomes
+       a two-column grid: canvas + toolbar stacked on the left, the picker docked
+       as an always-on panel on the right. Toggling off (or narrowing past the
+       breakpoint) drops every rule here, so the layout falls straight back to
+       the single-column + modal-picker default with no stuck state. */
+    @media (min-width: 800px) {
+      #layout-btn { display: flex; }
+
+      body.split main {
+        display: grid;
+        grid-template-columns: 1fr minmax(340px, 40%);
+        grid-template-rows: 1fr auto;
+        grid-template-areas:
+          "canvas picker"
+          "toolbar picker";
+        align-items: stretch;
+      }
+      /* min-width:0 lets the 1fr canvas track actually shrink (grid items
+         default to min-width:auto); min-height:0 it already has. */
+      body.split #canvas-wrap { grid-area: canvas; min-width: 0; }
+      body.split #toolbar { grid-area: toolbar; }
+
+      /* Dock the picker: undo the fixed-overlay positioning so it sits in its
+         grid cell and stays visible without needing the .show class. The
+         body.split #id selector outweighs .overlay / .overlay.show. */
+      body.split #picker-overlay {
+        grid-area: picker;
+        position: static;
+        inset: auto;
+        display: flex;
+        background: transparent;
+        z-index: auto;
+        padding: 0;
+      }
+      body.split .picker-card {
+        width: 100%;
+        height: 100%;
+        max-width: none;
+        max-height: none;
+        box-shadow: none;
+      }
+      /* The panel is always open, so the opener and the ✕ are both redundant;
+         the picker's own .active swatch shows the current stamp instead. */
+      body.split #close-picker,
+      body.split #stamp-btn { display: none; }
+
+      /* A shared-link board opens read-only (#toolbar gets .locked, showing the
+         Edit banner). #picker-overlay is a later sibling of #toolbar inside
+         <main>, so hide the docked panel while locked — it reads as a clean
+         canvas until Edit is tapped, then the panel returns. */
+      body.split #toolbar.locked ~ #picker-overlay { display: none; }
+
+      /* Docked panel: a tap-and-hold-free drag straight off a swatch carries it
+         to the canvas (see onPickerPointerDown). touch-action:none would give
+         the buttons the gesture from the first pixel, but that also swallows
+         an ordinary vertical scroll swipe over a swatch — the browser never
+         gets a chance to pan the list, so scrolling the panel would misfire
+         into "pick this emoji up" constantly. pan-y instead leaves vertical
+         panning to the browser (native, momentum-correct) and only withholds
+         the *horizontal* gesture — the direction an actual drag toward the
+         canvas takes — for onPickerPointerMove's direction-aware threshold
+         to claim. Mouse-wheel/trackpad scroll and the non-split modal picker
+         (which never sets this) are unaffected either way. */
+      body.split .emoji-opt { touch-action: pan-y; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <a class="top-btn" id="back-btn" href="../index.html" aria-label="Back to LibreToybox home">🏠</a>
+    <div class="logo" role="img" aria-label="Emoji Art" title="Emoji Art">
+      <svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true">
+        <rect x="4" y="6" width="40" height="36" rx="6" fill="#fff" stroke="#DE7590" stroke-width="2.5" transform="rotate(-4 24 24)"/>
+        <text x="24" y="31" text-anchor="middle" font-size="22" transform="rotate(-4 24 24)">🌟</text>
+      </svg>
+    </div>
+  </div>
+  <div class="top-btns">
+    <!-- Wide-screen only (hidden below the split breakpoint): docks the emoji
+         picker as an always-on side panel instead of a modal. Opt-in so the
+         layout never rearranges itself just because a device is wide. -->
+    <button class="top-btn" id="layout-btn" aria-pressed="false" aria-label="Show emoji panel">
+      <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+        <rect x="3" y="5" width="18" height="14" rx="2"/>
+        <line x1="14" y1="5" x2="14" y2="19"/>
+      </svg>
+    </button>
+    <button class="top-btn" id="new-game" aria-label="New Painting">🔄<span class="hold-progress" aria-hidden="true"></span></button>
+    <button class="top-btn" id="tutorial-btn" aria-label="How to Play">❓</button>
+  </div>
+</header>
+
+<main>
+  <div id="status" aria-live="polite"></div>
+  <div id="canvas-wrap">
+    <canvas id="drawing-canvas"></canvas>
+  </div>
+  <div id="toolbar">
+    <div id="tool-row">
+      <button class="stamp-btn" id="stamp-btn" aria-label="Choose emoji stamp">🌟</button>
+      <button class="action-btn" id="trash-btn" aria-label="Trash">🗑️</button>
+      <button class="action-btn" id="save-btn" aria-label="Save painting">💾</button>
+      <button class="action-btn" id="share-btn" aria-label="Share painting link">🔗</button>
+    </div>
+    <div id="locked-banner">
+      <span id="locked-label">Shared painting</span>
+      <button id="edit-btn" aria-label="Edit this painting">✏️ Edit</button>
+    </div>
+  </div>
+
+  <!-- The stamp picker. On narrow screens it's a fixed modal overlay (opened by
+       #stamp-btn). On wide screens with split view enabled it becomes a docked,
+       always-on side panel via the grid rules under @media (min-width:800px) —
+       the same DOM either way, only its positioning/visibility differ. It lives
+       inside <main> so it can be a grid cell when docked; position:fixed keeps
+       it out of flow in modal mode, so nesting it here doesn't affect that. -->
+  <div class="overlay" id="picker-overlay" role="dialog" aria-modal="true" aria-label="Choose an emoji stamp">
+    <div class="picker-card">
+      <div class="picker-header">
+        <h2>Pick a Stamp</h2>
+        <button class="top-btn" id="close-picker" aria-label="Close stamp picker">✕</button>
+      </div>
+      <div class="picker-nav" id="picker-nav" role="group" aria-label="Jump to category"></div>
+      <div class="picker-scroll" id="picker-scroll"></div>
+    </div>
+  </div>
+</main>
+
+<div class="overlay" id="tutorial-overlay" role="dialog" aria-modal="true" aria-label="How to Play">
+  <div class="tutorial-card">
+    <h2>🎓</h2>
+    <p>Tutorial coming soon!</p>
+    <button class="top-btn" id="close-tutorial" aria-label="Close">✕</button>
+  </div>
+</div>
+
+<!-- A lifted stamp rides as this floating element, not a canvas draw, so it can
+     follow the finger past the canvas edge all the way onto #trash-btn. -->
+<div id="lift-ghost" aria-hidden="true"></div>
+
+<script>
+const EMOJI_CATEGORIES = [
+  { label: '😀 Faces', emojis: '😀 😃 😄 😁 😆 😅 🤣 😂 🙂 🙃 😉 😊 😇 🥰 😍 🤩 😘 😋 😜 🤪 🤑 🤗 🤔 😐 😏 🙄 😴 🤤 😷 🤒 🤢 🥵 🥶 😵 🤯 🥳 😎 🤓 🧐 😢 😭 😡 👻'.split(' ') },
+  { label: '🐶 Animals', emojis: '🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🙈 🙉 🙊 🐔 🐧 🐦 🐤 🐥 🦆 🦉 🦇 🐺 🐗 🐴 🦄 🐝 🐛 🦋 🐌 🐞 🐢 🐍 🦎 🐙 🦑 🦀 🐠 🐟 🐬 🐳 🐋 🦈 🐊 🐅 🐆 🦓 🐘 🦒 🐫'.split(' ') },
+  { label: '🍎 Food', emojis: '🍏 🍎 🍊 🍋 🍌 🍉 🍇 🍓 🍒 🍑 🥭 🍍 🥥 🥝 🍅 🥑 🌽 🥕 🥐 🍞 🧀 🥚 🍳 🥞 🥓 🍗 🌭 🍔 🍟 🍕 🌮 🌯 🥗 🍝 🍜 🍣 🍱 🍙 🍦 🍩 🍪 🎂 🍰 🍫 🍭 🍬 🍿 🍯'.split(' ') },
+  { label: '🌈 Nature & Sky', emojis: '🌸 🌹 🌻 🌼 🌷 🌱 🌲 🌳 🌴 🌵 🍀 🍁 🍂 🍃 🍄 🌊 💧 ☔ 🌈 ☀️ ⛅ ☁️ 🌧️ ⛈️ ❄️ ☃️ 🌙 🌟 ⭐ 🌠 ⚡ 🔥 ✨ 🌕 🌛 🐚 🪐 ☄️ 🌫️ 💦'.split(' ') },
+  { label: '⚽ Activities', emojis: '⚽ 🏀 🏈 ⚾ 🎾 🏐 🏓 🏸 🏒 🥊 🥋 🎣 🏹 🎿 🏂 🛹 🎨 🎭 🎪 🎬 🎤 🎧 🎼 🎹 🥁 🎸 🎻 🎲 🎯 🎳 🎮 🎈 🎉 🎊 🏆 🥇'.split(' ') },
+  { label: '🚀 Travel', emojis: '🚗 🚕 🚙 🚌 🚓 🚑 🚒 🚚 🏍️ 🚲 🛴 🚂 🚆 ✈️ 🚀 🛸 🚁 ⛵ 🚤 🚢 ⚓ 🗺️ 🗽 🏰 🎡 🎢 🎠 ⛲ 🏖️ 🏝️ 🌋 🏔️ ⛰️ 🏠 🏡 🏫 🏥 🕌 🌉 🚦'.split(' ') },
+  { label: '🎁 Objects', emojis: '⌚ 📱 💻 📷 📺 🔦 🕯️ 💡 🔑 🔒 📚 📖 ✏️ 🖍️ 🎀 👑 💍 💎 🧸 🪀 🪁 🎁 🧩 🪄 🔋 🛍️ 👓 🎒 🧦 👟 👗 👒 🧢 🌂 ⏰ 🧴'.split(' ') },
+  { label: '❤️ Hearts & Symbols', emojis: '❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔 💕 💞 💓 💗 💖 💘 💝 💠 ☮️ ♥️ 💯 🔔 🔯 🕉️'.split(' ') }
+];
+
+// --- Share-link wire format ----------------------------------------------
+// A frozen, append-only snapshot of every emoji ever shareable, independent
+// of EMOJI_CATEGORIES above. Share links reference emoji by INDEX into this
+// list, so EMOJI_CATEGORIES (the picker) is free to be reordered/regrouped
+// later without corrupting old links. NEVER reorder, insert into the middle
+// of, or delete from this list — only append new emoji at the end.
+const EMOJI_MASTER = (
+  '😀 😃 😄 😁 😆 😅 🤣 😂 🙂 🙃 😉 😊 😇 🥰 😍 🤩 😘 😋 😜 🤪 🤑 🤗 🤔 😐 😏 🙄 😴 🤤 😷 🤒 🤢 🥵 🥶 😵 🤯 🥳 😎 🤓 🧐 😢 😭 😡 👻 ' +
+  '🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🙈 🙉 🙊 🐔 🐧 🐦 🐤 🐥 🦆 🦉 🦇 🐺 🐗 🐴 🦄 🐝 🐛 🦋 🐌 🐞 🐢 🐍 🦎 🐙 🦑 🦀 🐠 🐟 🐬 🐳 🐋 🦈 🐊 🐅 🐆 🦓 🐘 🦒 🐫 ' +
+  '🍏 🍎 🍊 🍋 🍌 🍉 🍇 🍓 🍒 🍑 🥭 🍍 🥥 🥝 🍅 🥑 🌽 🥕 🥐 🍞 🧀 🥚 🍳 🥞 🥓 🍗 🌭 🍔 🍟 🍕 🌮 🌯 🥗 🍝 🍜 🍣 🍱 🍙 🍦 🍩 🍪 🎂 🍰 🍫 🍭 🍬 🍿 🍯 ' +
+  '🌸 🌹 🌻 🌼 🌷 🌱 🌲 🌳 🌴 🌵 🍀 🍁 🍂 🍃 🍄 🌊 💧 ☔ 🌈 ☀️ ⛅ ☁️ 🌧️ ⛈️ ❄️ ☃️ 🌙 🌟 ⭐ 🌠 ⚡ 🔥 ✨ 🌕 🌛 🐚 🪐 ☄️ 🌫️ 💦 ' +
+  '⚽ 🏀 🏈 ⚾ 🎾 🏐 🏓 🏸 🏒 🥊 🥋 🎣 🏹 🎿 🏂 🛹 🎨 🎭 🎪 🎬 🎤 🎧 🎼 🎹 🥁 🎸 🎻 🎲 🎯 🎳 🎮 🎈 🎉 🎊 🏆 🥇 ' +
+  '🚗 🚕 🚙 🚌 🚓 🚑 🚒 🚚 🏍️ 🚲 🛴 🚂 🚆 ✈️ 🚀 🛸 🚁 ⛵ 🚤 🚢 ⚓ 🗺️ 🗽 🏰 🎡 🎢 🎠 ⛲ 🏖️ 🏝️ 🌋 🏔️ ⛰️ 🏠 🏡 🏫 🏥 🕌 🌉 🚦 ' +
+  '⌚ 📱 💻 📷 📺 🔦 🕯️ 💡 🔑 🔒 📚 📖 ✏️ 🖍️ 🎀 👑 💍 💎 🧸 🪀 🪁 🎁 🧩 🪄 🔋 🛍️ 👓 🎒 🧦 👟 👗 👒 🧢 🌂 ⏰ 🧴 ' +
+  '❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔 💕 💞 💓 💗 💖 💘 💝 💠 ☮️ ♥️ 💯 🔔 🔯 🕉️'
+).split(' ');
+const EMOJI_INDEX = new Map(EMOJI_MASTER.map((e, i) => [e, i]));
+
+// Non-fatal dev check: catches an emoji added to the picker but never
+// appended to EMOJI_MASTER, which would silently make it un-shareable.
+EMOJI_CATEGORIES.forEach((cat) => cat.emojis.forEach((e) => {
+  if (!EMOJI_INDEX.has(e)) console.warn('[emoji-paint] Emoji missing from EMOJI_MASTER (won\'t survive a share link):', e);
+}));
+
+// Board state packed into location.hash, bit-packed MSB-first and base64url-
+// encoded. The HASH fragment (not a query string) is used deliberately — it
+// never reaches the network, so it never hits GitHub Pages logs and never
+// becomes a distinct service-worker cache key (confirmed against sw.js's
+// fetch handler). Every payload leads with a version byte; decodeBoard()
+// branches on it and still reads every older version, so no shared link ever
+// breaks. The writer always emits the newest version.
+//
+// Wire v3 (current) — version byte, then a header, then a palette, then stamps:
+//   header:  12-bit aspect ratio (w/h, fixed-point) + 12-bit stamp fraction
+//            (stamp size ÷ shorter canvas side). These let a recipient rebuild
+//            the painting letterboxed at its ORIGINAL shape instead of
+//            stretching it to their own screen (see frameRect()).
+//   palette: 9-bit count k, then k × 12-bit EMOJI_MASTER indices — the DISTINCT
+//            emoji this painting uses, in first-appearance order.
+//   stamp:   a ceil(log2 k)-bit palette slot (ZERO bits when k≤1 — a one-emoji
+//            painting stores no per-stamp emoji at all), then an 8-bit x + 8-bit
+//            y (quantized 0..255). The palette generalizes v2's repeat flag: a
+//            stamp costs ~2–3 emoji bits instead of 12, whether or not runs
+//            repeat, so scattered/alternating paintings shrink too. 8-bit coords
+//            are ≤~1.5px on a phone / ~4px on a tablet — imperceptible for a
+//            56px emoji — and pack tighter than v2's 10-bit.
+// Wire v2 (legacy, still decoded) — header, then per stamp a 1-bit "same emoji
+//   as previous" flag + (12-bit index only when 0) + 10-bit x + 10-bit y.
+// Wire v1 (legacy, still decoded) — no header; per stamp a flat 12-bit index +
+//   12-bit x + 12-bit y. decodeBoard() still reads both so old links keep working.
+const WIRE_VERSION = 3;
+const INDEX_BITS = 12;             // width of an EMOJI_MASTER index (palette entries + v1/v2 stamps)
+const COORD_BITS = 8;              // v3 coordinate width
+const COORD_MAX = 255;
+const PAL_COUNT_BITS = 9;          // palette size k (0..511; EMOJI_MASTER has ~360)
+// Legacy v2 coordinate width, needed only to decode v2 links.
+const COORD_BITS_V2 = 10;
+const COORD_MAX_V2 = 1023;
+// Legacy v1 coordinate width, needed only to decode v1 links.
+const COORD_BITS_V1 = 12;
+const COORD_MAX_V1 = 4095;
+const STAMP_BITS_V1 = INDEX_BITS + COORD_BITS_V1 * 2;
+// Header fields (bits each) + their fixed-point scales — shared by v2 and v3.
+const META_BITS = 12;
+const AR_SCALE = 512;          // aspect ratio w/h as arQ / AR_SCALE (max ≈ 8.0)
+const AR_MIN = 0.2, AR_MAX = 6;
+const FRAC_MAX = (1 << META_BITS) - 1; // stamp fraction over 0..1
+const SHARE_WARN_STAMPS = 400; // soft threshold — sharing still works past this, the link just gets long
+
+// Bits to reference one of k palette slots (0 when k≤1 — a single-emoji
+// painting needs no per-stamp emoji bits at all).
+function paletteRefBits(k) { return k > 1 ? Math.ceil(Math.log2(k)) : 0; }
+
+function b64urlFromBytes(bytes) {
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function bytesFromB64url(str) {
+  const bin = atob(str.replace(/-/g, '+').replace(/_/g, '/')); // throws on malformed input
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// Encode a board to a base64url payload (wire v3). `meta` carries the source
+// canvas's aspect ratio + stamp fraction so the far side renders the painting
+// undistorted (see frameRect()). A per-painting palette of the distinct emoji
+// means each stamp references its emoji in ~2–3 bits instead of 12.
+function encodeBoard(stamps, meta) {
+  const bits = [];
+  const push = (val, n) => { for (let i = n - 1; i >= 0; i--) bits.push((val >> i) & 1); };
+
+  const ar = Math.max(AR_MIN, Math.min(AR_MAX, meta.ar || 1));
+  const arQ = Math.max(1, Math.min(FRAC_MAX, Math.round(ar * AR_SCALE)));
+  const fracQ = Math.max(1, Math.min(FRAC_MAX, Math.round(Math.max(0, Math.min(1, meta.stampFrac || 0)) * FRAC_MAX)));
+  push(arQ, META_BITS);
+  push(fracQ, META_BITS);
+
+  // Build the palette in first-appearance order (deterministic; never reorders
+  // stamps, so z-order is untouched). Unknown emoji are skipped, as before.
+  const palette = [];           // EMOJI_MASTER indices, in slot order
+  const slotOf = new Map();     // master index -> palette slot
+  const drawable = [];          // stamps whose emoji is known, with their slot
+  for (const s of stamps) {
+    const idx = EMOJI_INDEX.get(s.emoji);
+    if (idx === undefined) continue; // never emit an unknown emoji
+    let slot = slotOf.get(idx);
+    if (slot === undefined) { slot = palette.length; slotOf.set(idx, slot); palette.push(idx); }
+    drawable.push({ slot, x: s.x, y: s.y });
+  }
+
+  push(palette.length, PAL_COUNT_BITS);
+  palette.forEach((idx) => push(idx, INDEX_BITS));
+  const refBits = paletteRefBits(palette.length);
+
+  drawable.forEach((s) => {
+    const qx = Math.max(0, Math.min(COORD_MAX, Math.round(s.x * COORD_MAX)));
+    const qy = Math.max(0, Math.min(COORD_MAX, Math.round(s.y * COORD_MAX)));
+    if (refBits > 0) push(s.slot, refBits); // k≤1 → no per-stamp emoji bits
+    push(qx, COORD_BITS); push(qy, COORD_BITS);
+  });
+  const bytes = [WIRE_VERSION];
+  for (let i = 0; i < bits.length; i += 8) {
+    let byte = 0;
+    for (let j = 0; j < 8; j++) byte = (byte << 1) | (bits[i + j] || 0);
+    bytes.push(byte);
+  }
+  return b64urlFromBytes(Uint8Array.from(bytes));
+}
+
+// Fully defensive: any malformed, truncated, or tampered payload decodes to a
+// blank board rather than throwing. Unknown emoji indices are dropped but
+// decoding continues; coordinates are clamped to 0..1. Returns
+// { stamps, ar, stampFrac } — ar/stampFrac are null for v1 links (and blank
+// results), signalling "no fixed frame, fill the canvas as usual".
+function decodeBoard(str) {
+  const EMPTY = { stamps: [], ar: null, stampFrac: null };
+  try {
+    if (!str) return EMPTY;
+    const bytes = bytesFromB64url(str);
+    if (bytes.length < 1) return EMPTY;
+    const version = bytes[0];
+    if (version !== 1 && version !== 2 && version !== 3) return EMPTY;
+    let bitPos = 0;
+    const total = (bytes.length - 1) * 8;
+    const read = (n) => {
+      let v = 0;
+      for (let i = 0; i < n; i++) {
+        const p = bitPos + i;
+        const byte = bytes[1 + (p >> 3)];
+        v = (v << 1) | ((byte >> (7 - (p & 7))) & 1);
+      }
+      bitPos += n;
+      return v;
+    };
+    const clamp01 = (v, max) => Math.min(1, Math.max(0, v / max));
+
+    if (version === 1) {
+      const out = [];
+      while (total - bitPos >= STAMP_BITS_V1) {
+        const idx = read(INDEX_BITS);
+        const qx = read(COORD_BITS_V1);
+        const qy = read(COORD_BITS_V1);
+        const emoji = EMOJI_MASTER[idx];
+        if (emoji === undefined) continue; // drop unknown index, keep decoding
+        out.push({ emoji, x: clamp01(qx, COORD_MAX_V1), y: clamp01(qy, COORD_MAX_V1) });
+      }
+      return { stamps: out, ar: null, stampFrac: null };
+    }
+
+    // v2 & v3 both open with the aspect-ratio header.
+    if (total < META_BITS * 2) return EMPTY;
+    const arQ = read(META_BITS);
+    const fracQ = read(META_BITS);
+    const ar = arQ > 0 ? arQ / AR_SCALE : null;
+    const stampFrac = fracQ > 0 ? fracQ / FRAC_MAX : null;
+
+    if (version === 2) {
+      // Header, then per stamp a repeat flag + (12-bit index when new) + coords.
+      const out = [];
+      let prevIdx = -1;
+      // Smallest stamp is a repeat (1 + 2×COORD_BITS_V2 bits); once fewer than
+      // that remain it can only be the byte-padding zeros, so stop.
+      while (total - bitPos >= 1 + COORD_BITS_V2 * 2) {
+        const repeat = read(1);
+        let idx;
+        if (repeat) {
+          if (prevIdx < 0) break;            // malformed: repeat with nothing before it
+          idx = prevIdx;
+        } else {
+          if (total - bitPos < INDEX_BITS + COORD_BITS_V2 * 2) break; // truncated
+          idx = read(INDEX_BITS);
+          prevIdx = idx;
+        }
+        const qx = read(COORD_BITS_V2);
+        const qy = read(COORD_BITS_V2);
+        const emoji = EMOJI_MASTER[idx];
+        if (emoji === undefined) continue;   // drop unknown index, keep decoding
+        out.push({ emoji, x: clamp01(qx, COORD_MAX_V2), y: clamp01(qy, COORD_MAX_V2) });
+      }
+      return { stamps: out, ar, stampFrac };
+    }
+
+    // version 3 — header, then a palette, then palette-referenced stamps.
+    if (total - bitPos < PAL_COUNT_BITS) return EMPTY;
+    const k = read(PAL_COUNT_BITS);
+    // Each palette entry is a 12-bit master index; bail if the payload can't
+    // hold the whole palette (tampered/truncated).
+    if (total - bitPos < k * INDEX_BITS) return EMPTY;
+    const palette = [];
+    for (let i = 0; i < k; i++) palette.push(EMOJI_MASTER[read(INDEX_BITS)]); // undefined for unknowns
+    const refBits = paletteRefBits(k);
+    const out = [];
+    // Smallest stamp is refBits + 2×COORD_BITS; once fewer than that remain it
+    // can only be the byte-padding zeros, so stop.
+    while (total - bitPos >= refBits + COORD_BITS * 2) {
+      const slot = refBits > 0 ? read(refBits) : 0;
+      const qx = read(COORD_BITS);
+      const qy = read(COORD_BITS);
+      const emoji = palette[slot];
+      if (emoji === undefined) continue;   // out-of-range slot or unknown emoji → drop, keep decoding
+      out.push({ emoji, x: clamp01(qx, COORD_MAX), y: clamp01(qy, COORD_MAX) });
+    }
+    return { stamps: out, ar, stampFrac };
+  } catch (e) {
+    return EMPTY;
+  }
+}
+
+// --- Shared modal a11y helper (copied into each game — the suite ships no
+// bundler). Moves focus into an opened overlay, traps Tab within it, closes on
+// Escape, and restores focus to the opener on close (design principle 8). ---
+const Modal = {
+  opener: null, overlay: null, onDismiss: null, handler: null,
+  focusable(el) {
+    return [...el.querySelectorAll('a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+      .filter(n => n.getClientRects().length > 0);
+  },
+  open(overlay, onDismiss) {
+    this.opener = document.activeElement;
+    this.overlay = overlay;
+    this.onDismiss = onDismiss || null;
+    const items = this.focusable(overlay);
+    (items[0] || overlay).focus({ preventScroll: true });
+    this.handler = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (this.onDismiss) this.onDismiss(); else this.close();
+      } else if (e.key === 'Tab') {
+        const f = this.focusable(overlay);
+        if (!f.length) { e.preventDefault(); return; }
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && (document.activeElement === first || !overlay.contains(document.activeElement))) {
+          e.preventDefault(); last.focus();
+        } else if (!e.shiftKey && (document.activeElement === last || !overlay.contains(document.activeElement))) {
+          e.preventDefault(); first.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', this.handler, true);
+  },
+  close() {
+    if (this.handler) document.removeEventListener('keydown', this.handler, true);
+    this.handler = null;
+    const opener = this.opener;
+    this.opener = this.overlay = this.onDismiss = null;
+    if (opener && opener.focus) opener.focus({ preventScroll: true });
+  }
+};
+
+const App = {
+  stamp: '🌟',
+  STAMP_SIZE: 56,     // px, fixed — replaces the old color+brush-size controls
+  stamps: [],         // committed stamps: { emoji, x, y } in normalized 0..1 coords
+  placing: null,      // new stamp being carried by the current gesture, not yet committed
+  lifting: null,      // { stamp, x, y, startTime, lifted, hoverTrash, raf } — an existing stamp being tapped/lifted/dragged
+  trashArmed: false,  // tap-to-arm mode: the next tap on an existing stamp deletes it
+  erasingStamps: new Set(), // stamps mid-removal-animation — treated as already gone for hit-testing
+  LIFT_MS: 350,            // hold duration on an existing stamp before it lifts for repositioning
+  STAMP_HIT_RADIUS: 0.6,   // fraction of STAMP_SIZE counted as "touching" a placed stamp
+  PICKER_DRAG_PX: 12,      // movement past this, from a picker button, starts a drag-to-canvas gesture
+  pickerDrag: null,        // { emoji, startX, startY, x, y, dragging, pointerId } — split-view drag from the docked picker
+  audioCtx: null,
+
+  recents: [],        // most-recently-picked stamps, newest first, deduped
+  RECENTS_MAX: 8,
+
+  locked: false,       // true while viewing a shared-link board read-only, before Edit is tapped
+  shareFlashTimer: null,
+
+  // Set only for a board opened from a share link: the painting's original
+  // aspect ratio (w/h) and stamp size as a fraction of the shorter canvas
+  // side. When non-null, the canvas shows a letterboxed "paper" at that shape
+  // so the artwork is never squished to the recipient's screen; null = a fresh
+  // free painting that fills the whole canvas (see frameRect()/stampPx()).
+  artworkAR: null,
+  artworkStampFrac: null,
+
+  init() {
+    this.cacheDOM();
+    // The split-view breakpoint, cached once: split view is only "active" when
+    // the child has opted in (body.split) AND the viewport is wide enough for
+    // it (isSplitActive()). matchMedia stays in sync with the CSS media query.
+    this.splitMQ = window.matchMedia('(min-width: 800px)');
+    this.buildPicker();
+    this.bindEvents();
+    this.setupPWA();
+    // defer so layout is complete before we measure canvas dimensions
+    requestAnimationFrame(() => {
+      const shared = location.hash.slice(1); // capture before newGame() would otherwise leave it
+      this.newGame({ keepHash: true });      // sizes canvas, clears state, keeps the hash for now
+      if (shared) this.loadSharedBoard(shared);
+    });
+  },
+
+  cacheDOM() {
+    this.canvas = document.getElementById('drawing-canvas');
+    this.ctx = this.canvas.getContext('2d');
+    // Read the theme accent once so canvas-drawn cues (the lift halo) stay in
+    // sync with the CSS --accent variable instead of a duplicated literal.
+    const rootStyle = getComputedStyle(document.documentElement);
+    this.accent = (rootStyle.getPropertyValue('--accent').trim()) || '#DE7590';
+    // Same idea for the shared-painting "paper" frame outline + the tint that
+    // backs its letterbox margins (so the white paper reads as a picture).
+    this.border = (rootStyle.getPropertyValue('--border').trim()) || '#F3C3D1';
+    this.frameTint = (rootStyle.getPropertyValue('--bg2').trim()) || '#FFDCE6';
+    this.canvasWrap = document.getElementById('canvas-wrap');
+    this.statusEl = document.getElementById('status');
+    this.newGameBtn = document.getElementById('new-game');
+    this.stampBtn = document.getElementById('stamp-btn');
+    this.trashBtn = document.getElementById('trash-btn');
+    this.liftGhost = document.getElementById('lift-ghost');
+    this.shareBtn = document.getElementById('share-btn');
+    this.toolbar = document.getElementById('toolbar');
+    this.editBtn = document.getElementById('edit-btn');
+    this.pickerOverlay = document.getElementById('picker-overlay');
+    this.closePickerBtn = document.getElementById('close-picker');
+    this.pickerNav = document.getElementById('picker-nav');
+    this.pickerScroll = document.getElementById('picker-scroll');
+    this.layoutBtn = document.getElementById('layout-btn');
+    this.tutorialBtn = document.getElementById('tutorial-btn');
+    this.tutorialOverlay = document.getElementById('tutorial-overlay');
+    this.closeTutorialBtn = document.getElementById('close-tutorial');
+  },
+
+  createEmojiButton(emoji) {
+    const btn = document.createElement('button');
+    btn.className = 'emoji-opt';
+    btn.textContent = emoji;
+    btn.dataset.emoji = emoji;
+    return btn;
+  },
+
+  buildPicker() {
+    // Scroll-spy: highlights the jump chip for whichever category section
+    // is currently at the top of the visible scroll area. A short section
+    // (e.g. Recent with only one or two stamps) can intersect the trigger
+    // zone at the same time as the section right after it, so we can't just
+    // trust the last entry in the batch — instead track everything
+    // currently intersecting and always take the one earliest in DOM order.
+    this.visibleSections = new Set();
+    this.sectionObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        const key = entry.target.dataset.navKey;
+        if (entry.isIntersecting) this.visibleSections.add(key);
+        else this.visibleSections.delete(key);
+      });
+      const sections = this.pickerScroll.querySelectorAll('.picker-category');
+      const topMost = Array.from(sections).find((s) => this.visibleSections.has(s.dataset.navKey));
+      if (topMost) {
+        document.querySelectorAll('.nav-chip').forEach((c) => c.classList.toggle('active', c.dataset.navKey === topMost.dataset.navKey));
+      }
+    }, { root: this.pickerScroll, rootMargin: '0px 0px -70% 0px', threshold: 0 });
+
+    // Recent row — hidden (both section and chip) until the child has
+    // actually picked a stamp; an empty "Recent" section is just confusing.
+    this.recentChip = document.createElement('button');
+    this.recentChip.className = 'nav-chip hidden';
+    this.recentChip.textContent = '🕒';
+    this.recentChip.dataset.navKey = 'recent';
+    this.recentChip.setAttribute('aria-label', 'Jump to recently used stamps');
+    this.pickerNav.appendChild(this.recentChip);
+
+    this.recentSection = document.createElement('div');
+    this.recentSection.className = 'picker-category empty';
+    this.recentSection.dataset.navKey = 'recent';
+    this.recentGrid = document.createElement('div');
+    this.recentGrid.className = 'picker-grid recent-grid';
+    this.recentSection.appendChild(this.recentGrid);
+    // No divider above Recent — it's always the first section when shown,
+    // directly under the nav chips, so there's nothing above it to divide from.
+    this.pickerScroll.appendChild(this.recentSection);
+    this.sectionObserver.observe(this.recentSection);
+
+    EMOJI_CATEGORIES.forEach((cat, i) => {
+      const navKey = 'cat' + i;
+
+      const chip = document.createElement('button');
+      chip.className = 'nav-chip';
+      chip.textContent = cat.label.split(' ')[0];
+      chip.dataset.navKey = navKey;
+      chip.setAttribute('aria-label', 'Jump to ' + cat.label.replace(/^\S+\s/, ''));
+      this.pickerNav.appendChild(chip);
+
+      const section = document.createElement('div');
+      section.className = 'picker-category';
+      section.dataset.navKey = navKey;
+
+      const divider = document.createElement('div');
+      divider.className = 'picker-divider';
+      section.appendChild(divider);
+
+      const grid = document.createElement('div');
+      grid.className = 'picker-grid';
+      cat.emojis.forEach((emoji) => grid.appendChild(this.createEmojiButton(emoji)));
+      section.appendChild(grid);
+
+      this.pickerScroll.appendChild(section);
+      this.sectionObserver.observe(section);
+    });
+
+    this.pickerNav.addEventListener('click', (e) => {
+      const chip = e.target.closest('.nav-chip');
+      if (!chip || chip.classList.contains('hidden')) return;
+      const target = this.pickerScroll.querySelector('.picker-category[data-nav-key="' + chip.dataset.navKey + '"]');
+      if (target) target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  },
+
+  addToRecents(emoji) {
+    this.recents = this.recents.filter((e) => e !== emoji);
+    this.recents.unshift(emoji);
+    if (this.recents.length > this.RECENTS_MAX) this.recents.length = this.RECENTS_MAX;
+
+    this.recentGrid.innerHTML = '';
+    this.recents.forEach((e) => this.recentGrid.appendChild(this.createEmojiButton(e)));
+    const hasRecents = this.recents.length > 0;
+    this.recentSection.classList.toggle('empty', !hasRecents);
+    this.recentChip.classList.toggle('hidden', !hasRecents);
+  },
+
+  bindEvents() {
+    this.bindNewGameHold();
+
+    this.stampBtn.addEventListener('click', () => this.openPicker());
+    this.closePickerBtn.addEventListener('click', () => this.closePicker());
+    this.pickerOverlay.addEventListener('click', (e) => { if (e.target === this.pickerOverlay && !this.isSplitActive()) this.closePicker(); });
+    this.pickerScroll.addEventListener('click', (e) => {
+      const btn = e.target.closest('.emoji-opt');
+      if (!btn) return;
+      // In split view, pointer taps (mouse/touch/pen — e.detail !== 0) are
+      // already handled by onPickerPointerUp below, which distinguishes a
+      // plain tap from a drag; without this guard both would fire and
+      // double-select. Keyboard activation (Enter/Space, detail === 0) never
+      // reaches the pointer handlers, so it still needs this listener.
+      if (this.isSplitActive() && e.detail !== 0) return;
+      this.selectStamp(btn.dataset.emoji);
+    });
+    // Split-view only: drag a swatch straight off the docked picker and drop
+    // it on the canvas to place it there in one gesture, replacing the old
+    // two-step "tap swatch, then tap canvas" flow (the modal picker, used
+    // below the split breakpoint, keeps that two-step flow unchanged).
+    this.pickerScroll.addEventListener('pointerdown', (e) => this.onPickerPointerDown(e));
+    this.pickerScroll.addEventListener('pointermove', (e) => this.onPickerPointerMove(e));
+    this.pickerScroll.addEventListener('pointerup', (e) => this.onPickerPointerUp(e));
+    this.pickerScroll.addEventListener('pointercancel', (e) => this.onPickerPointerCancel(e));
+
+    this.tutorialBtn.addEventListener('click', () => this.openTutorial());
+    this.closeTutorialBtn.addEventListener('click', () => this.closeTutorial());
+    this.tutorialOverlay.addEventListener('click', (e) => { if (e.target === this.tutorialOverlay) this.closeTutorial(); });
+
+    this.trashBtn.addEventListener('click', () => this.toggleTrash());
+    document.getElementById('save-btn').addEventListener('click', () => this.downloadPainting());
+    this.shareBtn.addEventListener('click', () => this.shareBoard());
+    this.editBtn.addEventListener('click', () => this.exitLockedView());
+    this.layoutBtn.addEventListener('click', () => this.toggleLayout());
+
+    this.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
+    this.canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
+    this.canvas.addEventListener('pointerup', (e) => this.onPointerUp(e));
+    this.canvas.addEventListener('pointercancel', (e) => this.onPointerUp(e));
+    this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    window.addEventListener('resize', () => {
+      const newW = this.canvasWrap.clientWidth;
+      const newH = this.canvasWrap.clientHeight;
+      if (this.canvas.width !== newW || this.canvas.height !== newH) {
+        this.syncCanvasSize();
+        this.redrawCanvas();
+      }
+    });
+
+    // Crossing the split breakpoint (e.g. a tablet rotating) while split view
+    // is on: the resize listener above already re-sizes the canvas, but the
+    // picker also flips between docked panel and modal. Undocking to modal must
+    // drop any live focus trap and the .show state so it isn't stuck open, and
+    // the picker's dialog/region role has to follow the mode. The canvas resync
+    // is left to the resize listener, which fires on the same event.
+    this.splitMQ.addEventListener('change', () => {
+      if (!document.body.classList.contains('split')) return;
+      if (!this.splitMQ.matches) {
+        this.pickerOverlay.classList.remove('show');
+        Modal.close();
+        this.pickerDrag = null;
+        this.hideLiftGhost();
+      }
+      this.applyPickerModeAria();
+    });
+  },
+
+  // New Painting requires a deliberate hold, not a quick tap, so an
+  // accidental tap can't silently wipe the canvas. A quick tap/keypress
+  // does nothing; only a sustained HOLD_MS hold starts a fresh painting.
+  bindNewGameHold() {
+    const HOLD_MS = 500;
+    const btn = this.newGameBtn;
+    const ring = btn.querySelector('.hold-progress');
+    let timer = null, raf = null, startTime = null, startPt = null, active = false;
+
+    const tick = () => {
+      const pct = Math.min(100, ((performance.now() - startTime) / HOLD_MS) * 100);
+      ring.style.background = `conic-gradient(rgba(222,117,144,0.85) ${pct}%, transparent ${pct}%)`;
+      if (pct < 100) raf = requestAnimationFrame(tick);
+    };
+    const start = () => {
+      if (active) return;
+      active = true;
+      startTime = performance.now();
+      btn.classList.add('holding');
+      tick();
+      timer = setTimeout(() => {
+        active = false;
+        btn.classList.remove('holding');
+        if (navigator.vibrate) navigator.vibrate(40);
+        this.newGame();
+      }, HOLD_MS);
+    };
+    const cancel = () => {
+      if (!active) return;
+      active = false;
+      clearTimeout(timer);
+      if (raf) cancelAnimationFrame(raf);
+      btn.classList.remove('holding');
+      ring.style.background = '';
+    };
+
+    btn.addEventListener('pointerdown', (e) => { startPt = { x: e.clientX, y: e.clientY }; start(); });
+    btn.addEventListener('pointermove', (e) => {
+      if (!active || !startPt) return;
+      if (Math.hypot(e.clientX - startPt.x, e.clientY - startPt.y) > 10) cancel();
+    });
+    btn.addEventListener('pointerup', cancel);
+    btn.addEventListener('pointercancel', cancel);
+    btn.addEventListener('pointerleave', cancel);
+    btn.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) { e.preventDefault(); start(); }
+    });
+    btn.addEventListener('keyup', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') cancel();
+    });
+  },
+
+  // Normalize pointer coords to 0..1 within the drawable frame so stamps
+  // survive canvas resize. On a shared board the frame is the letterboxed
+  // paper, so a tap in the margin is clamped onto the paper.
+  getCanvasPoint(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    const f = this.frameRect();
+    const cx = (e.clientX - rect.left) / rect.width * this.canvas.width;
+    const cy = (e.clientY - rect.top) / rect.height * this.canvas.height;
+    return {
+      x: Math.max(0, Math.min(1, (cx - f.ox) / f.w)),
+      y: Math.max(0, Math.min(1, (cy - f.oy) / f.h))
+    };
+  },
+
+  // The drawable "paper" rectangle in canvas px. A fresh painting fills the
+  // whole canvas; a board opened from a share link is letterboxed (contain-fit)
+  // at its original aspect ratio so it never stretches to the recipient's
+  // screen — shown small if need be, with browser pinch-to-zoom for detail.
+  frameRect() {
+    const cw = this.canvas.width, ch = this.canvas.height;
+    if (!this.artworkAR) return { ox: 0, oy: 0, w: cw, h: ch };
+    let w = cw, h = cw / this.artworkAR;
+    if (h > ch) { h = ch; w = ch * this.artworkAR; }
+    return { ox: (cw - w) / 2, oy: (ch - h) / 2, w, h };
+  },
+
+  // Effective stamp diameter in canvas px: fixed for a free painting; scaled to
+  // the letterboxed frame for a shared board so proportions match the original.
+  stampPx() {
+    if (this.artworkStampFrac == null) return this.STAMP_SIZE;
+    const f = this.frameRect();
+    return this.artworkStampFrac * Math.min(f.w, f.h);
+  },
+
+  toCanvasX(xn) { const f = this.frameRect(); return f.ox + xn * f.w; },
+  toCanvasY(yn) { const f = this.frameRect(); return f.oy + yn * f.h; },
+
+  syncCanvasSize() {
+    const w = this.canvasWrap.clientWidth;
+    const h = this.canvasWrap.clientHeight;
+    this.canvas.width = w;
+    this.canvas.height = h;
+    this.canvas.style.width = w + 'px';
+    this.canvas.style.height = h + 'px';
+  },
+
+  newGame({ keepHash = false } = {}) {
+    this.stamps = [];
+    this.placing = null;
+    // A fresh painting has no fixed frame — it fills the whole canvas again.
+    this.artworkAR = null;
+    this.artworkStampFrac = null;
+    if (this.lifting) { cancelAnimationFrame(this.lifting.raf); this.lifting = null; }
+    this.pickerDrag = null;
+    this.hideLiftGhost();
+    this.erasingStamps.clear();
+    this.trashArmed = false;
+    this.updateTrashBtnVisual();
+    this.setLocked(false);
+    this.syncCanvasSize();
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    // Keep the hash across the boot-time call (a shared link is still loaded
+    // right after this returns) — but a real 🔄 tap always clears it, so a
+    // later plain reload doesn't reload the old shared board.
+    if (!keepHash) this.clearShareHash();
+    this.statusEl.textContent = 'New painting started.';
+  },
+
+  setLocked(locked) {
+    this.locked = locked;
+    this.toolbar.classList.toggle('locked', locked);
+  },
+
+  clearShareHash() {
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  },
+
+  loadSharedBoard(payload) {
+    const { stamps, ar, stampFrac } = decodeBoard(payload);
+    if (!stamps.length) return; // malformed/empty → normal blank start, no error shown
+    this.stamps = stamps;
+    // A v2 link carries the original shape; render it letterboxed at that
+    // aspect ratio so it isn't squished onto this screen. v1 links have no
+    // frame data and fall back to filling the canvas as before.
+    this.artworkAR = ar;
+    this.artworkStampFrac = stampFrac;
+    this.redrawCanvas();
+    this.audioStamp();
+    this.enterLockedView();
+  },
+
+  enterLockedView() {
+    this.setLocked(true);
+    this.statusEl.textContent = this.artworkAR
+      ? 'Shared painting loaded — pinch to zoom, or tap Edit to draw.'
+      : 'Shared painting loaded — tap Edit to draw.';
+  },
+
+  exitLockedView() {
+    this.setLocked(false);
+    this.clearShareHash();
+    this.audioClick();
+    this.statusEl.textContent = 'You can draw now!';
+  },
+
+  onPointerDown(e) {
+    if (this.locked) return; // read-only until Edit is tapped
+    e.preventDefault();
+    const pt = this.getCanvasPoint(e);
+    this.canvas.setPointerCapture(e.pointerId);
+
+    const hit = this.findStampAt(pt);
+    if (hit) {
+      // clientX/Y are tracked alongside the normalized canvas point so the
+      // floating ghost (see redrawLifted) can follow the finger off-canvas.
+      this.lifting = { stamp: hit, x: pt.x, y: pt.y, clientX: e.clientX, clientY: e.clientY, startTime: performance.now(), lifted: false, hoverTrash: false, raf: null };
+      this.lifting.raf = requestAnimationFrame((t) => this.tickLiftTimer(t));
+      return;
+    }
+
+    // Trash-armed mode only acts on existing stamps — a tap on empty canvas
+    // while armed is a no-op, not a new placement, so the tool reads as
+    // "deleting," not "deleting, except when it draws instead."
+    if (this.trashArmed) return;
+
+    this.placing = { emoji: this.stamp, x: pt.x, y: pt.y };
+    this.redrawCanvas();
+  },
+
+  onPointerMove(e) {
+    const pt = this.getCanvasPoint(e);
+
+    if (this.lifting) {
+      this.lifting.x = pt.x;
+      this.lifting.y = pt.y;
+      // Raw screen coords drive the off-canvas ghost; the clamped normalized
+      // point is where the stamp would land if dropped back on the canvas.
+      this.lifting.clientX = e.clientX;
+      this.lifting.clientY = e.clientY;
+      if (this.lifting.lifted) {
+        this.lifting.x = Math.max(0, Math.min(1, this.lifting.x));
+        this.lifting.y = Math.max(0, Math.min(1, this.lifting.y));
+        this.updateTrashHover(e);
+        this.redrawLifted();
+      }
+      return;
+    }
+
+    if (!this.placing) return;
+    this.placing.x = Math.max(0, Math.min(1, pt.x));
+    this.placing.y = Math.max(0, Math.min(1, pt.y));
+    this.redrawCanvas();
+  },
+
+  onPointerUp(e) {
+    if (this.lifting) {
+      const { stamp, lifted, hoverTrash, x, y } = this.lifting;
+      cancelAnimationFrame(this.lifting.raf);
+      this.lifting = null;
+      this.hideLiftGhost();
+
+      if (!lifted) {
+        // A quick tap on an existing stamp that never reached the lift
+        // threshold: in trash-armed mode that's the delete gesture: outside
+        // it, tapping an existing stamp does nothing (no accidental stacking).
+        // Trash mode stays armed after the delete — it's a toggle, not
+        // one-shot — so the next tap deletes another stamp too.
+        if (this.trashArmed) {
+          this.deleteStamp(stamp);
+        } else {
+          this.updateTrashBtnVisual();
+          this.redrawCanvas();
+        }
+        return;
+      }
+
+      this.updateTrashBtnVisual();
+      if (hoverTrash) {
+        this.deleteStamp(stamp);
+      } else {
+        stamp.x = x;
+        stamp.y = y;
+        // A repositioned stamp rises to the top layer: pull it out of its
+        // current z-order slot and re-push it last (last drawn = on top), so
+        // the emoji the child just picked up lands above everything it's
+        // dropped onto, matching the finger's "I'm holding this one" mental model.
+        const idx = this.stamps.indexOf(stamp);
+        if (idx !== -1) { this.stamps.splice(idx, 1); this.stamps.push(stamp); }
+        this.audioClick();
+        this.redrawCanvas();
+      }
+      return;
+    }
+
+    if (!this.placing) return;
+    this.stamps.push(this.placing);
+    this.placing = null;
+    this.audioStamp();
+    this.redrawCanvas();
+  },
+
+  // Nearest placed stamp within touching distance of a point, topmost first
+  // (last drawn = last in the array = visually on top, so that's what a tap
+  // on overlapping stamps should mean). Stamps mid-removal-animation don't
+  // count — they're already "gone" as far as new hits are concerned.
+  findStampAt(pt) {
+    const radius = this.stampPx() * this.STAMP_HIT_RADIUS;
+    const px = this.toCanvasX(pt.x);
+    const py = this.toCanvasY(pt.y);
+    for (let i = this.stamps.length - 1; i >= 0; i--) {
+      const s = this.stamps[i];
+      if (this.erasingStamps.has(s)) continue;
+      const dist = Math.hypot(px - this.toCanvasX(s.x), py - this.toCanvasY(s.y));
+      if (dist <= radius) return s;
+    }
+    return null;
+  },
+
+  // Tap-to-arm mode: tap the trash button to turn delete mode on — it stays
+  // armed (and shows red) across any number of taps-to-delete, until the
+  // child taps the trash button again or opens the emoji picker.
+  toggleTrash() {
+    this.trashArmed = !this.trashArmed;
+    this.updateTrashBtnVisual();
+    this.statusEl.textContent = this.trashArmed ? 'Tap a stamp to remove it.' : 'Trash off.';
+  },
+
+  updateTrashBtnVisual() {
+    const hover = this.lifting && this.lifting.hoverTrash;
+    this.trashBtn.classList.toggle('active', this.trashArmed || !!hover);
+  },
+
+  // Is the pointer currently over the trash button? Uses real viewport
+  // coordinates since the button lives outside the canvas — pointer capture
+  // keeps events targeting the canvas, but clientX/Y still reflect wherever
+  // the finger actually is on screen.
+  updateTrashHover(e) {
+    const rect = this.trashBtn.getBoundingClientRect();
+    const hover = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+    this.lifting.hoverTrash = hover;
+    this.updateTrashBtnVisual();
+  },
+
+  // Build an rgba-equivalent from the cached --accent hex plus an alpha byte
+  // (8-digit hex is valid as a canvas fillStyle), so the accent lives in one place.
+  accentAlpha(a) {
+    const byte = Math.max(0, Math.min(255, Math.round(a * 255)));
+    return this.accent + byte.toString(16).padStart(2, '0');
+  },
+
+  // Canvas port of a "picking this up" cue: a soft accent-colored halo grows
+  // in while held (deliberately not red — this hold isn't a delete
+  // countdown, just a grab), at a fixed position until the hold completes.
+  tickLiftTimer(now) {
+    if (!this.lifting || this.lifting.lifted) return;
+    const progress = Math.min(1, (now - this.lifting.startTime) / this.LIFT_MS);
+    const stamp = this.lifting.stamp;
+
+    this.redrawCanvas();
+    const cx = this.toCanvasX(stamp.x);
+    const cy = this.toCanvasY(stamp.y);
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.arc(cx, cy, this.stampPx() / 2 + 6, 0, Math.PI * 2);
+    this.ctx.fillStyle = this.accentAlpha(0.3 * progress);
+    this.ctx.fill();
+    this.ctx.restore();
+    this.drawStamp(stamp.emoji, stamp.x, stamp.y);
+
+    if (progress >= 1) {
+      this.lifting.lifted = true;
+      this.audioClick();
+      this.showLiftGhost();
+      this.redrawLifted();
+    } else {
+      this.lifting.raf = requestAnimationFrame((t) => this.tickLiftTimer(t));
+    }
+  },
+
+  // Once lifted, the stamp rides slightly enlarged with a soft drop shadow as a
+  // floating DOM element (not a canvas draw), so it can follow the finger past
+  // the canvas edge — all the way down onto the trash button — instead of
+  // sticking at the clamped canvas boundary. The underlying stamp stays hidden
+  // (redrawCanvas skips the lifting stamp) while the ghost stands in for it.
+  showLiftGhost() {
+    this.liftGhost.textContent = this.lifting.stamp.emoji;
+    this.liftGhost.style.fontSize = (this.stampPx() * 1.15) + 'px';
+    this.liftGhost.style.display = 'block';
+    this.moveLiftGhost();
+  },
+
+  moveLiftGhost() {
+    this.liftGhost.style.left = this.lifting.clientX + 'px';
+    this.liftGhost.style.top = this.lifting.clientY + 'px';
+  },
+
+  hideLiftGhost() {
+    this.liftGhost.style.display = 'none';
+  },
+
+  redrawLifted() {
+    this.redrawCanvas();
+    this.moveLiftGhost();
+  },
+
+  deleteStamp(stamp) {
+    this.erasingStamps.add(stamp);
+    this.audioSwoosh();
+    if (navigator.vibrate) navigator.vibrate(40);
+    this.animateRemoval(stamp);
+  },
+
+  // Sudoku's `.cleared`/`suction` keyframe (scale 1 → 0.1, fade to 0) ported
+  // to canvas frames, since there's no element here for a CSS animation to
+  // shrink-and-fade the actual stamp out before it leaves the board.
+  animateRemoval(stamp) {
+    const DURATION = 220;
+    const start = performance.now();
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / DURATION);
+      this.redrawCanvas({ skip: stamp });
+      this.drawStamp(stamp.emoji, stamp.x, stamp.y, 1 - t, 1 - t * 0.9);
+      if (t < 1) {
+        requestAnimationFrame(step);
+      } else {
+        const idx = this.stamps.indexOf(stamp);
+        if (idx !== -1) this.stamps.splice(idx, 1);
+        this.erasingStamps.delete(stamp);
+        this.redrawCanvas();
+      }
+    };
+    requestAnimationFrame(step);
+  },
+
+  drawStamp(emoji, xn, yn, alpha = 1, scale = 1) {
+    this.ctx.save();
+    this.ctx.globalAlpha = alpha;
+    this.ctx.font = `${this.stampPx() * scale}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+    this.ctx.fillText(emoji, this.toCanvasX(xn), this.toCanvasY(yn));
+    this.ctx.restore();
+  },
+
+  // A shared board renders on a letterboxed white "paper" so the frame reads
+  // as a picture: the letterbox margins get a soft tint backing, the paper
+  // stays white with a thin border. (#canvas-wrap is itself white, so without
+  // the tint the paper would vanish into its own margins.)
+  drawPaperFrame() {
+    const f = this.frameRect();
+    this.ctx.save();
+    this.ctx.fillStyle = this.frameTint;
+    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    this.ctx.fillStyle = '#fff';
+    this.ctx.fillRect(f.ox, f.oy, f.w, f.h);
+    this.ctx.strokeStyle = this.border;
+    this.ctx.lineWidth = 2;
+    this.ctx.strokeRect(f.ox + 1, f.oy + 1, f.w - 2, f.h - 2);
+    this.ctx.restore();
+  },
+
+  redrawCanvas(opts = {}) {
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    if (this.artworkAR) this.drawPaperFrame();
+    // A stamp being lifted/dragged is drawn separately (see redrawLifted),
+    // at the live drag position rather than its resting one.
+    const liftingStamp = this.lifting ? this.lifting.stamp : null;
+    this.stamps.forEach((s) => {
+      if (s === opts.skip || s === liftingStamp) return;
+      this.drawStamp(s.emoji, s.x, s.y);
+    });
+    // The stamp currently being carried (mid-gesture) isn't committed yet —
+    // show it translucent so the child can see where it will land.
+    if (this.placing) this.drawStamp(this.placing.emoji, this.placing.x, this.placing.y, 0.55);
+  },
+
+  downloadPainting() {
+    // The live canvas is transparent, so exporting it directly yields a PNG
+    // with a see-through background. Composite it onto a solid white sheet
+    // first so the saved image reads as paper, not checkerboard.
+    const out = document.createElement('canvas');
+    out.width = this.canvas.width;
+    out.height = this.canvas.height;
+    const octx = out.getContext('2d');
+    octx.fillStyle = '#FFFFFF';
+    octx.fillRect(0, 0, out.width, out.height);
+    octx.drawImage(this.canvas, 0, 0);
+    const a = document.createElement('a');
+    a.href = out.toDataURL('image/png');
+    a.download = 'emoji-paint.png';
+    a.click();
+    this.statusEl.textContent = 'Painting saved.';
+  },
+
+  shareBoard() {
+    if (this.stamps.length === 0) {
+      this.audioSwoosh();
+      this.statusEl.textContent = 'Add a stamp before sharing.';
+      return;
+    }
+    // Capture the painting's shape so the recipient can rebuild it undistorted.
+    // A board opened from a share link keeps its original frame; a fresh
+    // painting measures this canvas (which fills the viewport).
+    const f = this.frameRect();
+    const meta = {
+      ar: this.artworkAR || (f.w / f.h),
+      stampFrac: this.artworkStampFrac != null
+        ? this.artworkStampFrac
+        : this.STAMP_SIZE / Math.min(f.w, f.h)
+    };
+    const payload = encodeBoard(this.stamps, meta);
+    // location.origin is "null" on file:// — build from href instead, which
+    // works everywhere and already carries the right path.
+    const url = location.href.replace(/#.*$/, '') + '#' + payload;
+    history.replaceState(null, '', url); // reflect the link in the address bar, no reload
+    const bigBoard = this.stamps.length > SHARE_WARN_STAMPS;
+    const sharedMsg = bigBoard ? 'Shared! (Big painting — the link may be long.)' : 'Shared!';
+    const copiedMsg = bigBoard ? 'Link copied! (Big painting — the link may be long.)' : 'Link copied!';
+
+    if (navigator.share) {
+      // Must be called synchronously within the click handler (transient
+      // activation) — no awaiting anything before this.
+      navigator.share({ title: 'Emoji Art', url })
+        .then(() => { this.flashShare('✅'); this.statusEl.textContent = sharedMsg; })
+        .catch(() => {}); // user cancelled — not an error
+      return;
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(url)
+        .then(() => { this.audioClick(); this.flashShare('✅'); this.statusEl.textContent = copiedMsg; })
+        .catch(() => this.promptCopy(url));
+      return;
+    }
+    this.promptCopy(url);
+  },
+
+  // Last-resort fallback (e.g. file://, or no clipboard permission): the link
+  // is already in the address bar via history.replaceState above.
+  promptCopy(url) {
+    this.flashShare('🔗');
+    this.statusEl.textContent = 'Copy the link from the address bar.';
+    try { window.prompt('Copy this link:', url); } catch (e) {}
+  },
+
+  // Kid-friendly confirmation: swap the share button's glyph briefly instead
+  // of a text toast/alert.
+  flashShare(glyph) {
+    clearTimeout(this.shareFlashTimer);
+    this.shareBtn.textContent = glyph;
+    this.shareFlashTimer = setTimeout(() => { this.shareBtn.textContent = '🔗'; }, 1100);
+  },
+
+  // Split view is only "on" when opted in (body.split) AND wide enough for it
+  // (matches the CSS @media breakpoint). When it's on, the picker is a docked
+  // always-visible panel; when off, it's the fixed modal.
+  isSplitActive() {
+    return document.body.classList.contains('split') && this.splitMQ.matches;
+  },
+
+  // Wide-screen only: dock the picker as a persistent side panel (or undo it).
+  // Purely opt-in — nothing rearranges until the child taps the toggle.
+  toggleLayout() {
+    const on = !document.body.classList.contains('split');
+    document.body.classList.toggle('split', on);
+    this.layoutBtn.classList.toggle('active', on);
+    this.layoutBtn.setAttribute('aria-pressed', String(on));
+    this.layoutBtn.setAttribute('aria-label', on ? 'Hide emoji panel' : 'Show emoji panel');
+    this.audioClick();
+
+    if (on) {
+      // Docking replaces the modal: drop any live modal state and seed the
+      // panel so it opens reflecting the current stamp and a sensible chip.
+      this.pickerOverlay.classList.remove('show');
+      Modal.close();
+      this.highlightCurrentStamp();
+      this.pickerScroll.scrollTop = 0;
+      const firstVisible = this.pickerScroll.querySelector('.picker-category:not(.empty)');
+      if (firstVisible) {
+        document.querySelectorAll('.nav-chip').forEach((c) => c.classList.toggle('active', c.dataset.navKey === firstVisible.dataset.navKey));
+      }
+    }
+    this.applyPickerModeAria();
+
+    // The class change resizes #canvas-wrap without firing a resize event, so
+    // re-sync the backing store and repaint (same as exquisite-corpse's
+    // setCanvasMode). Normalized coords mean the stamps reflow automatically.
+    this.syncCanvasSize();
+    this.redrawCanvas();
+    this.statusEl.textContent = on ? 'Emoji panel docked on the side.' : 'Emoji panel closed.';
+  },
+
+  // A docked panel is not a modal — drop aria-modal and use a region role so
+  // assistive tech doesn't treat the rest of the page as inert; restore the
+  // dialog role when it's the fixed modal again.
+  applyPickerModeAria() {
+    if (this.isSplitActive()) {
+      this.pickerOverlay.setAttribute('role', 'region');
+      this.pickerOverlay.removeAttribute('aria-modal');
+    } else {
+      this.pickerOverlay.setAttribute('role', 'dialog');
+      this.pickerOverlay.setAttribute('aria-modal', 'true');
+    }
+  },
+
+  highlightCurrentStamp() {
+    document.querySelectorAll('.emoji-opt').forEach((b) => b.classList.toggle('active', b.dataset.emoji === this.stamp));
+  },
+
+  openPicker() {
+    // In split view the picker is already docked and visible — no modal to open.
+    if (this.isSplitActive()) return;
+    // Opening the emoji selector is a "let's draw" action — disarm the
+    // trash tool so a stray tap on the canvas afterward doesn't delete.
+    if (this.trashArmed) { this.trashArmed = false; this.updateTrashBtnVisual(); }
+    this.highlightCurrentStamp();
+    // A hidden (display:none) element has no scrollbox, so scrollTop must be
+    // set after showing the overlay — setting it first is a silent no-op.
+    this.pickerOverlay.classList.add('show');
+    // Always open at the top — with jump chips for fast travel, a
+    // predictable starting point beats remembering the last scroll spot.
+    this.pickerScroll.scrollTop = 0;
+    const firstVisible = this.pickerScroll.querySelector('.picker-category:not(.empty)');
+    if (firstVisible) {
+      document.querySelectorAll('.nav-chip').forEach((c) => c.classList.toggle('active', c.dataset.navKey === firstVisible.dataset.navKey));
+    }
+    Modal.open(this.pickerOverlay, () => this.closePicker());
+  },
+  closePicker() { this.pickerOverlay.classList.remove('show'); Modal.close(); },
+
+  openTutorial() { this.tutorialOverlay.classList.add('show'); Modal.open(this.tutorialOverlay, () => this.closeTutorial()); },
+  closeTutorial() { this.tutorialOverlay.classList.remove('show'); Modal.close(); },
+
+  // --- Split-view drag-from-picker ------------------------------------------
+  // In the docked panel, an emoji swatch can be dragged straight onto the
+  // canvas to place it there, instead of tap-to-select then tap-to-place.
+  // A tap that never crosses PICKER_DRAG_PX still falls through to the old
+  // select-only behavior via onPickerPointerUp below.
+
+  onPickerPointerDown(e) {
+    if (!this.isSplitActive()) return;
+    const btn = e.target.closest('.emoji-opt');
+    if (!btn) return;
+    // Starting a drag reads as "let's draw" — same reasoning as openPicker()
+    // disarming trash mode, so a drop on the canvas can't be misread as a delete.
+    if (this.trashArmed) { this.trashArmed = false; this.updateTrashBtnVisual(); }
+    this.pickerScroll.setPointerCapture(e.pointerId);
+    this.pickerDrag = {
+      emoji: btn.dataset.emoji,
+      startX: e.clientX, startY: e.clientY,
+      x: e.clientX, y: e.clientY,
+      dragging: false,
+      pointerId: e.pointerId
+    };
+  },
+
+  onPickerPointerMove(e) {
+    const drag = this.pickerDrag;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    if (!drag.dragging) {
+      // Direction-aware, not just distance: a vertical-dominant move is a
+      // scroll (touch-action:pan-y on .emoji-opt already leaves that to the
+      // browser, which cancels this pointer sequence via onPickerPointerCancel
+      // once it claims the pan) — only a horizontal-dominant move, the
+      // direction an actual drag toward the canvas takes, starts a carry.
+      // This is belt-and-braces for the few slop pixels before the browser's
+      // native takeover lands, so a scroll swipe never flashes the ghost.
+      const dx = drag.x - drag.startX, dy = drag.y - drag.startY;
+      if (Math.abs(dx) < this.PICKER_DRAG_PX || Math.abs(dx) <= Math.abs(dy)) return;
+      drag.dragging = true;
+      this.liftGhost.textContent = drag.emoji;
+      this.liftGhost.style.fontSize = (this.stampPx() * 1.15) + 'px';
+      this.liftGhost.style.display = 'block';
+    }
+    this.liftGhost.style.left = drag.x + 'px';
+    this.liftGhost.style.top = drag.y + 'px';
+  },
+
+  onPickerPointerUp(e) {
+    const drag = this.pickerDrag;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    this.pickerDrag = null;
+
+    if (!drag.dragging) {
+      // A plain tap never crossed the drag threshold — same as the old
+      // tap-to-select behavior (also covers mouse clicks, which fire pointer
+      // events too).
+      this.selectStamp(drag.emoji);
+      return;
+    }
+
+    this.hideLiftGhost();
+    const rect = this.canvas.getBoundingClientRect();
+    const overCanvas = !this.locked &&
+      drag.x >= rect.left && drag.x <= rect.right && drag.y >= rect.top && drag.y <= rect.bottom;
+    if (!overCanvas) {
+      // Dropped outside the canvas (back over the panel, or off it entirely):
+      // cancel the placement, nothing changes.
+      return;
+    }
+
+    const pt = this.getCanvasPoint({ clientX: drag.x, clientY: drag.y });
+    this.stamp = drag.emoji;
+    this.stampBtn.textContent = drag.emoji;
+    this.addToRecents(drag.emoji);
+    this.highlightCurrentStamp();
+    this.stamps.push({ emoji: drag.emoji, x: pt.x, y: pt.y });
+    this.audioStamp();
+    this.redrawCanvas();
+    this.statusEl.textContent = `${drag.emoji} placed.`;
+  },
+
+  onPickerPointerCancel(e) {
+    const drag = this.pickerDrag;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    this.pickerDrag = null;
+    this.hideLiftGhost();
+  },
+
+  selectStamp(emoji) {
+    this.stamp = emoji;
+    this.stampBtn.textContent = emoji;
+    this.addToRecents(emoji);
+    this.audioClick();
+    this.statusEl.textContent = `Stamp selected: ${emoji}`;
+    // Docked panel stays open (it's persistent); keep the chosen swatch marked.
+    // The modal closes on pick, as before.
+    if (this.isSplitActive()) this.highlightCurrentStamp();
+    else this.closePicker();
+  },
+
+  setupPWA() {
+    // The whole toybox is one PWA: a single shared manifest
+    // (../manifest.webmanifest, linked in <head>) and one root-scoped
+    // service worker. Browsers reject blob:/data: worker scripts and
+    // file:// has no SW support, so register only over http(s).
+    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+      navigator.serviceWorker.register('../sw.js').then((root) => {
+        // Drop any old per-game worker from before unification so the one
+        // root worker controls this page (longest scope wins).
+        navigator.serviceWorker.getRegistrations().then((regs) =>
+          regs.forEach((r) => {
+            if (r !== root && r.scope.startsWith(root.scope) && r.scope !== root.scope) r.unregister();
+          })
+        );
+      }).catch(() => {});
+    }
+  },
+
+  ensureAudio() {
+    if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (this.audioCtx.state === 'suspended') this.audioCtx.resume();
+  },
+
+  playTone({ type = 'sine', freq = 440, duration = 100, startGain = 0.0001, peakGain = 0.15 }) {
+    this.ensureAudio();
+    const ctx = this.audioCtx;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    gain.gain.setValueAtTime(startGain, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(peakGain, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration / 1000);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + duration / 1000 + 0.02);
+  },
+
+  audioStamp() {
+    this.playTone({ type: 'sine', freq: 700 + Math.random() * 220, duration: 90, peakGain: 0.18 });
+  },
+
+  audioClick() {
+    this.playTone({ type: 'sine', freq: 520, duration: 40, peakGain: 0.08 });
+  },
+
+  audioSwoosh() {
+    this.ensureAudio();
+    const ctx = this.audioCtx;
+    const n = Math.floor(ctx.sampleRate * 0.1);
+    const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.1);
+    src.connect(gain).connect(ctx.destination);
+    src.start();
+  }
+};
+
+App.init();
+</script>
+</body>
+</html>
