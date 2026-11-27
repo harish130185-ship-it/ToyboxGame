@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LibreToybox</title>
+  <title>MindGame</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪁</text></svg>" />
   <link rel="manifest" href="manifest.webmanifest" />
   <meta name="theme-color" content="#9480DC" />
@@ -86,43 +86,43 @@
   </style>
 </head>
 <body>
-  <a class="tool-link" href="calm-corner/" aria-label="Calm Corner — helpful tools">🚪</a>
-  <h1>🪁 LibreToybox</h1>
+  <a class="tool-link" href="calm-corner/index.html" aria-label="Calm Corner — helpful tools">🚪</a>
+  <h1>🪁 MindGame</h1>
   <p class="tagline">Simple HTML5 games for kids aged 6–8. No tracking, registration or addictive feedback loops - just joy.</p>
   <div class="games">
-    <a class="card" href="sudoku-for-minis/">
+    <a class="card" href="sudoku-for-minis/index.html">
       <span class="emoji">🔢</span>
       Mini-Sudoku
     </a>
-    <a class="card" href="exquisite-corpse/">
+    <a class="card" href="exquisite-corpse/index.html">
       <span class="emoji">🎨</span>
       Fold &amp; Draw
     </a>
-    <a class="card" href="memory/">
+    <a class="card" href="memory/index.html">
       <span class="emoji">❓</span>
       Memory
     </a>
-    <a class="card" href="shape-fit/">
+    <a class="card" href="shape-fit/index.html">
       <span class="emoji">🧩</span>
       Fit It!
     </a>
-    <a class="card" href="emoji-paint/">
+    <a class="card" href="emoji-paint/index.html">
       <span class="emoji">🌟</span>
       Emoji Art
     </a>
-    <a class="card" href="odd-one-out/">
+    <a class="card" href="odd-one-out/index.html">
       <span class="emoji">🔍</span>
       Spot It!
     </a>
-    <a class="card" href="grocery-cashier/">
+    <a class="card" href="grocery-cashier/index.html">
       <span class="emoji">🧮</span>
       Math fun
     </a>
-    <a class="card" href="guess-next-sequence/">
+    <a class="card" href="guess-next-sequence/index.html">
       <span class="emoji">🔮</span>
       What's Next?
     </a>
-    <a class="card" href="through-the-woods/">
+    <a class="card" href="through-the-woods/index.html">
       <span class="emoji">🌲</span>
       Path Home
     </a>
@@ -130,11 +130,15 @@
   <footer><a href="https://github.com/KhaaL/LibreToybox">Source on GitHub</a> · GNU GPL v3.0</footer>
 
   <script>
-    // The whole toybox is one PWA: a single shared manifest (linked above) and
-    // one root-scoped service worker registered here. Service workers must come
-    // from a real http(s) URL — browsers reject blob:/data: worker scripts, and
-    // file:// has no SW support anyway.
-    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    // In native wrapper (Capacitor), assets are bundled locally in the APK.
+    // Unregister any stale service workers to ensure direct local file loading.
+    if (window.Capacitor) {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then((regs) => {
+          regs.forEach((r) => r.unregister());
+        });
+      }
+    } else if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
       navigator.serviceWorker.register('sw.js').then((root) => {
         // Drop any old, narrower-scoped worker from before unification so the
         // one root worker controls the whole site (longest scope wins).

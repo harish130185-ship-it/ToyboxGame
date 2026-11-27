@@ -26,7 +26,7 @@ const env = {
 execSync('.\\gradlew.bat assembleDebug', { cwd: path.join(ROOT, 'android'), env, stdio: 'inherit' });
 
 const srcApk = path.join(ROOT, 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
-const destApk = path.join(ROOT, 'LibreToybox.apk');
+const destApk = path.join(ROOT, 'MindGame.apk');
 
 if (fs.existsSync(srcApk)) {
   fs.copyFileSync(srcApk, destApk);

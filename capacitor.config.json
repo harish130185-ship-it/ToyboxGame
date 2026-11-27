@@ -1,5 +1,8 @@
 {
   "appId": "se.khalid.libretoybox",
-  "appName": "LibreToybox",
-  "webDir": "www"
+  "appName": "MindGame",
+  "webDir": "www",
+  "server": {
+    "html5mode": false
+  }
 }
